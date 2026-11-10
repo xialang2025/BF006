@@ -1,0 +1,4 @@
+interface:
+  display_name: "BF006 固件编译"
+  short_description: "自动切换宏、全量编译并校验 BF006 多版本烧录文件"
+  default_prompt: "使用 $bf006-firmware-build 编译 BF006 默认四个版本并生成今天的烧录文件。"
