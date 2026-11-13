@@ -2,7 +2,7 @@
 #include "eeprom.h"
 #include "system.h"
 #include "user.h"
-#include "updata4G.h"
+//20261113-0 del 封存旧协议头文件引用：#include "updata4G.h"
 
 #define BIAS_ADDR 0x0000 //20260729-13 change 恢复 7 月 14 日版本的参数单副本存储地址
 #define BAN_BEN 18 //20260430-3 change update version after adding total-time remainder fields
@@ -91,8 +91,10 @@ void Par_Init(void) //20260729-13 change
 
         config.run_fen = 0;
         config.run_xiaoshi = 0;
+#if 0 //20261113-0 del 恢复默认参数时停用旧协议的全量上报。
         Send_dat.updataAll = 1;
         Send_dat.GuZhangJiLu = 1;
+#endif
     }
 
     switch (config.Dev_type)

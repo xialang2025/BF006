@@ -3,7 +3,7 @@
 #include "configPar.h"
 #include "Display.h"
 #include "user.h"
-#include "updata4G.h"
+//20261113-0 del 封存旧协议头文件引用：#include "updata4G.h"
 
 #define BIAS_ADDR 0x0000
 #define Fault_LOSEPHASE_Tdelay 15   // loss-phase protection delay
@@ -94,7 +94,7 @@ void Write_Fault_Mess(u8 dat, u16 dat1, u16 dat2)
     config.Record_Dat2[0] = dat2;
 
     sys.save_flag = 1;
-    Send_dat.GuZhangJiLu = 1;
+    //20261113-0 del 停用旧协议的故障历史上报标志：Send_dat.GuZhangJiLu = 1;
 }
 
 void Water_Level(void)
@@ -1017,7 +1017,7 @@ void Sys_Control(void)
     }
 #endif
 
-    // Pump_C_state = sys.GateSW;
+    //20261113-0 del 封存旧协议的继电器控制引用：Pump_C_state = sys.GateSW;
     Pump_C_state = sys.Faulte_out || sys.flowover;
 
     if (Pump_C_state)

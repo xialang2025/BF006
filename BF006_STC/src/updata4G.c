@@ -1,3 +1,4 @@
+#if 0 //20261113-0 del 封存旧模块的初始化、报文解析、远程命令和上报状态。
 #include "updata4G.h"
 #include "uart4.h"
 #include "string.h"
@@ -956,3 +957,4 @@ void Analyse_4G(void)
         COM4.B_RX_OK = 0;
     }
 }
+#endif

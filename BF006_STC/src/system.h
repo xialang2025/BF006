@@ -272,10 +272,10 @@ typedef struct{
 
 	u8 beep_err;
 	
-	u8 up4G_err;
+	//20261113-0 del 释放旧协议的故障上报状态：u8 up4G_err;
 	
 	u8 flowover;
-	u8 GateSW;
+	//20261113-0 del 释放旧协议的远程开关状态：u8 GateSW;
 	
 }sys_t;
 

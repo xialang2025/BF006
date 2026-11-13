@@ -8,7 +8,7 @@
 #include "configPar.h"
 #include "RS485.h"
 #include "modbus.h"
-#include "updata4G.h"
+#include "uart4.h" //20261113-0 change 由主函数直接配置串口四
 
 /******************** 主函数 **************************/
 void main(void)
@@ -28,18 +28,20 @@ void main(void)
 #endif	
     sys_init();
     Par_Init();
-    updata4G_init();
+    uart_init(); //20261113-0 change 在开放全局中断前完成串口四配置
     EA = 1; // 允许CPU 全局中断
     RS485_EN  = 0;
+#if 0 //20261113-0 del 封存旧协议的上电上报标志。
 	Send_dat.updataAll = 1;
     Send_dat.GuZhangJiLu = 0;
+#endif
     while(1)
     {
 #if (Function_RS485 == 1)
         Modbus_analysis();
 #endif
 
-        Analyse_4G();
+        //20261113-0 del 封存旧协议的接收解析入口：Analyse_4G();
 
         //模拟量采集
 //		MEASURE_Pro();
@@ -126,10 +128,12 @@ void main(void)
             Total_Time_Second_Handle((RELAY1 || RELAY2) ? 1 : 0); //20260430-3 add maintain P-21/P-22 total time
 
             autoZhending();
+#if 0 //20261113-0 del 封存旧协议每秒执行的上报入口。
             if(Boot_Flag)
             {			
 				Updata_4G();
 			}
+#endif
         }
 
     }

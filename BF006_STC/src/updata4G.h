@@ -1,6 +1,7 @@
 #ifndef UPDATA4G_H
 #define UPDATA4G_H
 
+#if 0 //20261113-0 del 封存旧协议的接口声明、报文状态及超时定义。
 #include	"config.h"
 
 #define TIMEOUTCNT 20
@@ -88,4 +89,5 @@ void Updata_4G(void);
 void Analyse_4G(void);
 
 extern Send_dat_t Send_dat;
+#endif
 #endif

@@ -3,6 +3,9 @@
 
 #include	"config.h"
 
+void uart_init(void); //20261113-0 change 保留串口四硬件初始化接口
+
+#if 0 //20261113-0 del 封存旧协议的串口缓冲区、计数和收发接口声明。
 #define	COM_TX4_Lenth	512
 #define	COM_RX4_Lenth	255
 #define	TimeOutSet1		5
@@ -29,4 +32,5 @@ u8 Getchar(char* vl);
 extern	COMx_Define	COM4;
 extern	u8	xdata TX4_Buffer[COM_TX4_Lenth];	//发送缓冲
 extern	u8 	xdata RX4_Buffer[COM_RX4_Lenth];	//接收缓冲
+#endif
 #endif

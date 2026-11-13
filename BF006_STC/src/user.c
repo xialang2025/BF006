@@ -1054,7 +1054,7 @@ void Err_Check_Dis(void)
         }
 
         Err_Dis(i);
-        sys.up4G_err = i;
+        //20261113-0 del 停用旧协议的故障上报码：sys.up4G_err = i;
     }
     else
     {
@@ -1070,6 +1070,7 @@ void Err_Check_Dis(void)
         LCD_ERROR_A_PUMP = 0;
         LCD_ERROR_B_PUMP = 0;
 
+#if 0 //20261113-0 del 封存仅供旧协议使用的传感器和溢流上报码。
         if (sys.sensor_err)
         {
             sys.up4G_err = ERR_NUMB + 1;
@@ -1083,6 +1084,7 @@ void Err_Check_Dis(void)
 
             sys.up4G_err = ERR_NUMB;
         }
+#endif
     }
 }
 
