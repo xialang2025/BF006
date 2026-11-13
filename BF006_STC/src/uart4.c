@@ -1,7 +1,7 @@
 #include "uart4.h"
 //20261113-0 del 封存旧串口状态清零所用头文件：#include "string.h"
 
-#define	BaudRate4		115200UL	//选择波特率
+#define	BaudRate4		9600UL	//20261113-1 change 串口四使用九千六百波特，八位数据、无校验、一位停止位
 #define Timer4_Reload	(65536UL -(MAIN_Fosc / 4 / BaudRate4)) //20261113-0 change 定时器四重装值，溢出频率为波特率的四倍
 #if 0 //20261113-0 del 释放旧串口的收发缓冲区、指针及接收超时状态。
 #define	TimeOutSet4		5
