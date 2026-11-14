@@ -11,6 +11,7 @@
 #include "uart4.h" //20261114-2 change 由主函数直接配置串口四
 #include "snapshot4g.h" //20261114-2 add
 #include "config_store.h" //20261114-4 add
+#include "boot_identity.h" //20261114-14 add
 
 #if BF006_CONFIG_STORE_ENABLED && Function_RF
 extern void RF_Process(void);
@@ -34,6 +35,9 @@ void main(void)
 #endif	
     sys_init();
     Par_Init();
+#if BF006_BOARD_CONTEXT
+    Boot_Context_Init(); //20261114-14 add 在开放接收前验证执行代次
+#endif
     uart_init(); //20261113-0 change 在开放全局中断前完成串口四配置
     EA = 1; // 允许CPU 全局中断
     RS485_EN  = 0;

@@ -7,6 +7,66 @@
 #define IDENTITY_RECORD_SIZE 8
 #define IDENTITY_COMMIT 0xA5
 
+#if BF006_BOARD_CONTEXT
+#if BF006_BOOT_SLOT_A < 512 || BF006_BOOT_SLOT_B < 512 || BF006_BOOT_SLOT_A % 512 || BF006_BOOT_SLOT_B % 512 || BF006_BOOT_SLOT_A > 65024 || BF006_BOOT_SLOT_B > 65024 || BF006_BOOT_SLOT_A == BF006_BOOT_SLOT_B || BF006_BOOT_SLOT_A == BF006_CONFIG_SLOT_A || BF006_BOOT_SLOT_A == BF006_CONFIG_SLOT_B || BF006_BOOT_SLOT_B == BF006_CONFIG_SLOT_A || BF006_BOOT_SLOT_B == BF006_CONFIG_SLOT_B
+#error BF006_BOOT_SLOT_LAYOUT
+#endif
+static u32 boot_generation = 0;
+static volatile u32 boot_uptime = 0;
+static volatile u8 boot_time_lost = 0;
+
+/******************************************************************************
+ * 函数名称       : Boot_Context_Init
+ * 功能描述       : 启动时从维护登记日志取得读回确认的新代次。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void Boot_Context_Init(void) //20261114-14 add
+{
+    boot_generation = Boot_Identity_Advance(BF006_BOOT_SLOT_A, BF006_BOOT_SLOT_B, 512);
+}
+
+/******************************************************************************
+ * 函数名称       : Boot_Context_Tick
+ * 功能描述       : 以已经过实体核验的毫秒节拍推进时间。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void Boot_Context_Tick(void) //20261114-14 add
+{
+    if (++boot_uptime == 0) {
+        boot_time_lost = 1;
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : Boot_Context_Read
+ * 功能描述       : 返回经过身份、配置和时钟检查的执行上下文。
+ * 输入参数       : boot 代次，revision 配置版本，uptime 当前毫秒
+ * 返回值         : 可用时返回一
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u8 Boot_Context_Read(u32 *boot, u32 *revision, u32 *uptime) //20261114-14 add
+{
+    bit interrupt_enabled;
+    u8 time_lost;
+
+    if (!boot_generation || !config_trusted) {
+        return 0;
+    }
+    interrupt_enabled = EA;
+    EA = 0;
+    *uptime = boot_uptime;
+    time_lost = boot_time_lost;
+    EA = interrupt_enabled;
+    *boot = boot_generation;
+    *revision = config_revision;
+    return !time_lost;
+}
+#endif
+
 typedef struct {
     u32 generation;
     u16 available;

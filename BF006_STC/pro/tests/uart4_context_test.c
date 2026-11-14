@@ -135,6 +135,21 @@ void main(void) //20261114-6 add
     Exchange(10, 90);
     memcpy(baseline, &reply[11], sizeof(baseline));
 
+    Test_Result = 46;
+    frame[5] = 2;
+    frame[8] = frame[9] = 0;
+    Exchange(12, 127);
+    if (reply[8] || reply[22] != 1 || reply[26] != 7 || reply[32] != 17 ||
+        memcmp(&reply[48], baseline, sizeof(baseline))) {
+        Test_Done();
+    }
+    frame[5] = 3;
+    frame[8] = frame[9] = 0;
+    Exchange(12, 78);
+    if (reply[8] || reply[48] != 3 || reply[57] != 2 || reply[54] != 43 || reply[56] != 114) {
+        Test_Done();
+    }
+
     offset = 8;
     for (field = 1; field <= 28; field++) {
         Test_Result = field + 1;

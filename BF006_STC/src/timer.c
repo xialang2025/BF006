@@ -1,5 +1,6 @@
 #include "system.h"
 #include "ad.h"
+#include "boot_identity.h" //20261114-14 add
 #include "uart4.h" //20261114-2 change 由定时中断维护快照分帧
 
 #define	Timer0_Reload	(MAIN_Fosc / 1000)		//Timer 0 中断频率, 1000HZ
@@ -57,6 +58,9 @@ void TIM0_IRQHandler (void) interrupt TIMER0_VECTOR
 	static u16 Timer_1S = 0;
 	P55 = 1;
     Timer_1ms_Flag = 1;
+#if BF006_BOARD_CONTEXT
+    Boot_Context_Tick(); //20261114-14 add
+#endif
 	Water_Level();
 
 #if (Function_RS485 == 1)

@@ -4,6 +4,7 @@
 #include "Display.h"
 #include "HT1622.h"
 #include "user.h"
+#include "boot_identity.h" //20261114-14 add
 
 #if (Model_OUT == Model_1C1)
 #define SNAPSHOT_FUNCTION 0x43
@@ -175,15 +176,22 @@ static void Snapshot_Write_Data(u8 base) //20261114-6 change
     }
 }
 
-#ifdef BF006_CONTEXT_SIMULATION
+#if BF006_BOARD_CONTEXT || defined(BF006_CONTEXT_SIMULATION)
 #define SNAPSHOT_CONTEXT_SIZE 37
 #define SNAPSHOT_CONTEXT_DATA 48
 
+#ifdef BF006_CONTEXT_SIMULATION
 extern u8 Snapshot_Test_Context(u32 *boot, u32 *revision, u32 *uptime);
+#define READ_CONTEXT Snapshot_Test_Context
+#else
+#define READ_CONTEXT Boot_Context_Read
+#endif
 static u32 Snapshot_Get32(u8 offset);
 static u32 context_boot = 0;
 static u32 context_time = 0;
 static u8 context_lost = 0;
+static u8 xdata control_high_water[8];
+static u32 control_boot = 0;
 
 /******************************************************************************
  * 函数名称       : Snapshot_Context
@@ -194,7 +202,7 @@ static u8 context_lost = 0;
  ******************************************************************************/
 static u8 Snapshot_Context(u32 *boot, u32 *revision, u32 *now) //20261114-12 add
 {
-    if (!Snapshot_Test_Context(boot, revision, now) || !*boot || !*revision ||
+    if (!READ_CONTEXT(boot, revision, now) || !*boot || !*revision ||
         *revision == 0xFFFFFFFFUL || *boot < context_boot) {
         return 0;
     }
@@ -211,6 +219,51 @@ static u8 Snapshot_Context(u32 *boot, u32 *revision, u32 *now) //20261114-12 add
         context_time = *now;
     }
     return !context_lost;
+}
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Context_Reply
+ * 功能描述       : 在上下文可信时构造完整读取或能力应答。
+ * 输入参数       : length 用于返回数据区长度
+ * 返回值         : 协议结果码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Context_Reply(u8 *length) //20261114-14 add
+{
+    u32 boot;
+    u32 revision;
+    u32 now;
+    u8 pump_state;
+
+    if (!Snapshot_Context(&boot, &revision, &now)) {
+        return SNAPSHOT_CONTEXT_UNAVAILABLE;
+    }
+    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
+    pump_state = uart4_frame[SNAPSHOT_CONTEXT_DATA + 17];
+    memset(&uart4_frame[SNAPSHOT_HEADER_SIZE], 0, SNAPSHOT_CONTEXT_SIZE);
+    Snapshot_Put32(19, boot);
+    Snapshot_Put32(23, revision);
+    Snapshot_Put32(27, now);
+    uart4_frame[34] = pump_state;
+    if (uart4_frame[5] == 2) {
+        uart4_frame[32] = 17;
+        *length = SNAPSHOT_CONTEXT_SIZE + SNAPSHOT_DATA_SIZE;
+    } else {
+        uart4_frame[32] = 1;
+        memset(&uart4_frame[48], 0, 28);
+        uart4_frame[48] = 3;
+        uart4_frame[52] = 3; // 仅声明已验证的两个只读入口
+        Snapshot_Put16(53, 43);
+        Snapshot_Put16(55, 114);
+        uart4_frame[57] = 2;
+        Snapshot_Put16(58, 600);
+        Snapshot_Put16(60, 10000);
+        if (control_boot == boot) {
+            memcpy(&uart4_frame[66], control_high_water, sizeof(control_high_water));
+        }
+        *length = SNAPSHOT_CONTEXT_SIZE + 28;
+    }
+    return 0;
 }
 
 /******************************************************************************
@@ -603,8 +656,6 @@ typedef struct {
 } Control_Record;
 
 static Control_Record xdata controls[2];
-static u8 xdata control_high_water[8];
-static u32 control_boot = 0;
 
 /******************************************************************************
  * 函数名称       : Snapshot_Get32
@@ -845,13 +896,17 @@ void Snapshot4G_Process(void) //20261114-9 change
         if (length != 12 || uart4_frame[8] || uart4_frame[9]) {
             result = 3;
         } else {
+#if BF006_BOARD_CONTEXT || defined(BF006_CONTEXT_SIMULATION)
+            result = Snapshot_Context_Reply(&data_length);
+#else
             result = SNAPSHOT_CONTEXT_UNAVAILABLE;
+#endif
         }
     } else if (uart4_frame[5] == 4) {
         if (length != 14 || uart4_frame[8] || uart4_frame[9] != 2) {
             result = 3;
         } else {
-#ifdef BF006_CONTEXT_SIMULATION
+#if BF006_BOARD_CONTEXT || defined(BF006_CONTEXT_SIMULATION)
             result = Snapshot_Field_Reply(&data_length);
 #else
             result = SNAPSHOT_CONTEXT_UNAVAILABLE;
