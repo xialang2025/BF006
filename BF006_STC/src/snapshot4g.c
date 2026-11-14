@@ -453,6 +453,8 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
         result = 0x20;
     } else if (sys.Pump_A_state || sys.Pump_A_ON) {
         result = 0x21;
+    } else if (sys.Setting_Flag == 2 && sys.Setting_Index < 21) {
+        result = 6; //20261114-11 add 实际编辑优先，浏览及只读参数不占用
     } else if (group) {
         changed = 0;
         switch (uart4_frame[31]) {
@@ -641,7 +643,7 @@ static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) 
  * 返回值         : 协议结果码
  * 日期            : 2026.11.14
  ******************************************************************************/
-static u8 Control_Reply(u8 *length) //20261114-7 add
+static u8 Control_Reply(u8 *length) //20261114-11 change
 {
     Control_Record xdata *entry;
     u8 i;
@@ -708,7 +710,9 @@ static u8 Control_Reply(u8 *length) //20261114-7 add
         } else {
             memcpy(control_high_water, &uart4_frame[10], 8);
             entry = &controls[action == 2];
-            if (entry->phase == 2) {
+            if (entry->phase == 2 ||
+                (action != 2 && (controls[1].phase == 2 ||
+                 (sys.Setting_Flag == 2 && sys.Setting_Index < 21)))) {
                 entry = 0;
                 result = 6;
             } else {

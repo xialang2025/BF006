@@ -353,6 +353,32 @@ void main(void) //20261114-6 add
     if (reply[8] != 0x2F || config.Sensor_STOP != 123 || config.Set_OVERLOAD_Current1 != 100) {
         Test_Done();
     }
+
+    Test_Result = 42;
+    frame[5] = 0x10;
+    frame[9] = 22;
+    memset(&frame[10], 0, 22);
+    frame[17] = 4;
+    frame[21] = 1;
+    frame[25] = 7;
+    frame[28] = 0xFD;
+    frame[29] = 0xE8;
+    frame[31] = 1;
+    sys.Setting_Flag = 2;
+    Exchange(34, 50);
+    if (reply[8] != 6 || sys.Pump_A_ON) {
+        Test_Done();
+    }
+    sys.Setting_Flag = 1;
+    Exchange(34, 50);
+    if (reply[8] != 0x2C || sys.Pump_A_ON) {
+        Test_Done();
+    }
+    frame[17] = 5;
+    Exchange(34, 50);
+    if (reply[8] || !sys.Pump_A_ON) {
+        Test_Done();
+    }
     Test_Result = 0;
     Test_Done();
 }
