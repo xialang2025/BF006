@@ -197,7 +197,12 @@ void MEASURE_Sample(void)
                     {
                         Result_AD[i] = Sum_AD[i] >> 9;
                         Sum_AD[i] = 0;
+#if (Model_OUT == Model_1C1)
+                        //20261114-1 change 模拟量输入保留低值，断线与有效零由各自的换算判断
+                        if (i < 6 && Result_AD[i] < 10)
+#else
                         if (Result_AD[i] < 10)
+#endif
                         {
                             Result_AD[i] = 0;
                         }
@@ -232,6 +237,9 @@ void MEASURE_Sample(void)
 
                     sys.Cur_AD = Result_AD[6];
                     sys.Vol_AD = Result_AD[7];
+#if (Model_OUT == Model_1C1)
+                    sys.sensor_adc_ready = 1; //20261114-1 add 两路模拟量均写完后发布采样
+#endif
 #if (Model_Voltage == Model_3PH)
                     u32Temp = sys.Current_A1 + sys.Current_B1 + sys.Current_C1;
 

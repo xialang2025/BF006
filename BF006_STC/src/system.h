@@ -218,9 +218,20 @@ typedef struct{
 	
 	u8 save_flag;
 	
+#if (Model_OUT == Model_1C1)
+	volatile u16 Vol_AD;
+	volatile u16 Cur_AD;
+	volatile u8 sensor_adc_ready; //20261114-1 add 本传感器类型已收到一批采样
+	u8 sensor_value_valid;        // 当前工程值已发布且输入正常
+#else
 	u16 Vol_AD;
 	u16 Cur_AD;
+#endif
+#if (Model_OUT == Model_1C1)
+	u32 SensorOut; //20261114-1 change 保留完整的百分之一单位工程值
+#else
 	u16 SensorOut;
+#endif
 	u8 SensorLever;
 
 	u8 FangXiuAFlag;
@@ -242,10 +253,17 @@ typedef struct{
 	u16 autoTurnA_cnt;
 	u16 autoTurnB_cnt;
 	
+#if (Model_OUT == Model_1C1)
+	u32 Sensor_Rang; //20261114-1 change 量程和启停位统一使用百分之一单位
+	u32 Sensor_STOP;
+	u32 Sensor_ON1;
+	u32 Sensor_ON2;
+#else
 	u16 Sensor_Rang;
 	u16 Sensor_STOP;
 	u16 Sensor_ON1;
 	u16 Sensor_ON2;
+#endif
 	u8 sensor_err;
 	u8 Sensor_OverFlow;
     u8 Pump_master;	
@@ -300,6 +318,11 @@ extern bit Boot_Flag;
 extern sys_t sys;
 
 void sys_init(void);
+void updatSysdata(void); //20261114-1 add
+#if (Model_OUT == Model_1C1)
+u16 Sensor_Legacy_Value(u32 value);
+u16 Sensor_Legacy_Reading(void);
+#endif
 void Sys_Control(void);
 void Water_Level(void);
 #if (Model_OUT == Model_1C2)

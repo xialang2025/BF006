@@ -13,7 +13,6 @@
 struct Uart_Type RecData; //20260430-0 add RX buffer used by the new protocol, keeping the old UART driver reference unchanged
 
 extern void Record_Clr_and_Reset(void);
-extern void updatSysdata(void);
 
 /******************************************************************************
  * Function       : modbus_new_crc16
@@ -691,7 +690,11 @@ static u8 modbus_new_read_monitor(u16 addr, u16 *value) //20260713-0 change
         *value = config.Sensor_STOP;
         break;
     case 0x2109:
+#if (Model_OUT == Model_1C1)
+        *value = Sensor_Legacy_Reading(); //20261114-1 change 使用完整工程值，超界返回无效码
+#else
         *value = sys.SensorOut;
+#endif
         break;
     case 0x210a:
         *value = sys.shang_shuiwei;
@@ -712,7 +715,10 @@ static u8 modbus_new_read_monitor(u16 addr, u16 *value) //20260713-0 change
     case 0x210f: //20260713-0 add 当前运行使用的传感器类型，对应P-18的0至4选项
         *value = sys.Auto_Mode;
         break;
-    case 0x2110: //20260713-0 add 连续传感器数值放大一百倍，开关量类型返回无效值
+    case 0x2110: //20261114-1 change 连续传感器数值放大一百倍，无有效读数或超界时返回无效码
+#if (Model_OUT == Model_1C1)
+        *value = Sensor_Legacy_Reading();
+#else
         if ((sys.Auto_Mode >= SENSORTYPE_WATER4_20MA) && (sys.Auto_Mode <= SENSORTYPE_PRESS0_5V))
         {
             *value = sys.SensorOut;
@@ -721,6 +727,7 @@ static u8 modbus_new_read_monitor(u16 addr, u16 *value) //20260713-0 change
         {
             *value = MODBUS_NEW_SENSOR_VALUE_INVALID;
         }
+#endif
         break;
     case 0x2111: //20260713-0 add 当前连续传感器数值的单位代码
         if (sys.Auto_Mode == SENSORTYPE_WATER4_20MA)

@@ -1088,6 +1088,38 @@ void Err_Check_Dis(void)
     }
 }
 
+#if (Model_OUT == Model_1C1)
+/******************************************************************************
+ * 函数名称       : Display_Continuous_Sensor
+ * 功能描述       : 用四位数字显示连续量，超出显示范围时保留单位并显示横线。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static void Display_Continuous_Sensor(void) //20261114-1 add
+{
+    u16 display_value;
+
+    LCD_MIMITER = (sys.Auto_Mode == SENSORTYPE_WATER4_20MA);
+    LCD_MPA = !LCD_MIMITER;
+    if (sys.SensorOut > 9999UL) {
+        NUM5.All = 0x40;
+        NUM6.All = 0x40;
+        NUM7.All = 0x40;
+        NUM8.All = 0x40;
+        LCD_P3 = 0;
+        return;
+    }
+
+    display_value = (u16)sys.SensorOut; // 已检查显示范围，保留原两位小数
+    NUM5.All = LED_LIST[display_value / 1000];
+    NUM6.All = LED_LIST[display_value / 100 % 10];
+    NUM7.All = LED_LIST[display_value / 10 % 10];
+    NUM8.All = LED_LIST[display_value % 10];
+    LCD_P3 = 1;
+}
+#endif
+
 void DIS_Control(void)
 {
     u16 RemainTime;
@@ -1370,6 +1402,12 @@ void DIS_Control(void)
                 NUM7.All = 0;
                 NUM8.All = 0;
             }
+#if (Model_OUT == Model_1C1)
+            else if (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA &&
+                     sys.Auto_Mode <= SENSORTYPE_PRESS0_5V) { //20261114-1 change
+                Display_Continuous_Sensor();
+            }
+#else
             else if (sys.Auto_Mode == SENSORTYPE_WATER4_20MA) // 液位
             {
                 NUM5.All = LED_LIST[sys.SensorOut / 1000 % 10];
@@ -1399,6 +1437,7 @@ void DIS_Control(void)
                 LCD_MPA = 1;
                 LCD_P3 = 1;
             }
+#endif
             else // 水位
             {
                 //			if(config.shuiWeiDingshi)
@@ -1878,5 +1917,11 @@ void SW_Read(void)
     //        sys.Auto_Mode = 0;
     //    }
 
+#if (Model_OUT == Model_1C1)
+    if (sys.Auto_Mode != config.Auto_Mode) { //20261114-1 add 换型后等待下一批采样
+        sys.sensor_adc_ready = 0;
+        sys.sensor_value_valid = 0;
+    }
+#endif
     sys.Auto_Mode = config.Auto_Mode;
 }

@@ -69,13 +69,59 @@ void Record_Clr_and_Reset(void)
 }
 #endif
 
-void updatSysdata(void)
+/******************************************************************************
+ * 函数名称       : updatSysdata
+ * 功能描述       : 将配置量程和启停位换算为运行态的百分之一单位。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void updatSysdata(void) //20261114-1 change
 {
+#if (Model_OUT == Model_1C1)
+    sys.Sensor_Rang = (u32)config.Sensor_Rang * 10UL;
+    sys.Sensor_STOP = (u32)config.Sensor_STOP * 10UL;
+    sys.Sensor_ON1 = (u32)config.Sensor_ON1 * 10UL;
+    sys.Sensor_ON2 = (u32)config.Sensor_ON2 * 10UL;
+#else
     sys.Sensor_Rang = config.Sensor_Rang * 10;
     sys.Sensor_STOP = config.Sensor_STOP * 10;
     sys.Sensor_ON1 = config.Sensor_ON1 * 10;
     sys.Sensor_ON2 = config.Sensor_ON2 * 10;
+#endif
 }
+
+#if (Model_OUT == Model_1C1)
+/******************************************************************************
+ * 函数名称       : Sensor_Legacy_Value
+ * 功能描述       : 将连续量转换成旧寄存器编码，保留全一无效码。
+ * 输入参数       : value 百分之一单位的连续量
+ * 返回值         : 旧寄存器值
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u16 Sensor_Legacy_Value(u32 value) //20261114-1 add
+{
+    if (value >= 0xFFFFUL) {
+        return 0xFFFF;
+    }
+    return (u16)value;
+}
+
+/******************************************************************************
+ * 函数名称       : Sensor_Legacy_Reading
+ * 功能描述       : 读取当前类型的有效工程值并转换成旧寄存器编码。
+ * 输入参数       : None
+ * 返回值         : 旧寄存器值
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u16 Sensor_Legacy_Reading(void) //20261114-1 add
+{
+    if (!sys.sensor_value_valid || config.Auto_Mode != sys.Auto_Mode) {
+        return 0xFFFF;
+    }
+    return Sensor_Legacy_Value(sys.SensorOut);
+}
+#endif
 
 void Write_Fault_Mess(u8 dat, u16 dat1, u16 dat2)
 {
@@ -308,9 +354,52 @@ void YaLiCtr_Check(void)
     }
 }
 
-void CUR4_20Ma_Check(void)
+#if (Model_OUT == Model_1C1)
+/******************************************************************************
+ * 函数名称       : Sensor_Read_ADC
+ * 功能描述       : 读取本类型已发布的完整转换计数。
+ * 输入参数       : adc 转换计数地址
+ * 返回值         : 转换计数
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u16 Sensor_Read_ADC(volatile u16 *adc) //20261114-1 add
+{
+    bit interrupt_enabled;
+    u16 sample;
+
+    interrupt_enabled = EA;
+    EA = 0;
+    sample = *adc; // 中断更新两个字节时，主循环只读取完整的计数
+    EA = interrupt_enabled;
+
+    return sample;
+}
+#endif
+
+/******************************************************************************
+ * 函数名称       : CUR4_20Ma_Check
+ * 功能描述       : 计算电流型传感器的工程值和断线状态。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void CUR4_20Ma_Check(void) //20261114-1 change
 {
     u32 temp;
+#if (Model_OUT == Model_1C1)
+    u16 sample;
+
+    sample = Sensor_Read_ADC(&sys.Cur_AD);
+    sys.sensor_err = (sample < 100);
+    sys.SensorOut = 0;
+    if (sample >= 196) {
+        if (sample > 983) {
+            sample = 983; // 夹住过量程的转换计数，保留原上边界
+        }
+        temp = ((u32)(sample - 196) * sys.Sensor_Rang + 393UL) / 786UL;
+        sys.SensorOut = temp;
+    }
+#else
     if (sys.Cur_AD < 100)
     {
         sys.sensor_err = 1;
@@ -333,11 +422,30 @@ void CUR4_20Ma_Check(void)
         temp += 393;
         sys.SensorOut = temp / 786;
     }
+#endif
 }
 
-void Vol0_5V_Check(void)
+/******************************************************************************
+ * 函数名称       : Vol0_5V_Check
+ * 功能描述       : 计算电压型传感器的工程值和断线状态。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void Vol0_5V_Check(void) //20261114-1 change
 {
     u32 temp;
+#if (Model_OUT == Model_1C1)
+    u16 sample;
+
+    sample = Sensor_Read_ADC(&sys.Vol_AD);
+    sys.sensor_err = (sample < 2);
+    sys.SensorOut = 0;
+    if (sample > 10) {
+        temp = ((u32)(sample - 10) * sys.Sensor_Rang + 506UL) / 1013UL;
+        sys.SensorOut = temp;
+    }
+#else
     if (sys.Vol_AD < 2)
     {
         sys.SensorOut = 0;
@@ -357,11 +465,17 @@ void Vol0_5V_Check(void)
         sys.sensor_err = 0;
         sys.SensorOut = 0;
     }
+#endif
 }
 
 void sensorOverFlowCheck(void)
 {
+#if (Model_OUT == Model_1C1)
+    //20261114-1 change 溢出阈值与工程值采用相同单位和位宽
+    if (sys.SensorOut > (u32)config.Sensor_overFlow * 10UL)
+#else
     if (sys.SensorOut > config.Sensor_overFlow * 10)
+#endif
     {
         sys.Sensor_OverFlow = 1;
     }
@@ -374,6 +488,19 @@ void sensorOverFlowCheck(void)
 // water level check
 void shuiwei_check(void)
 {
+#if (Model_OUT == Model_1C1)
+    u8 analog_mode;
+
+    analog_mode = (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA &&
+                   sys.Auto_Mode <= SENSORTYPE_PRESS0_5V);
+    if (analog_mode && !sys.sensor_adc_ready) { //20261114-1 add 等待采样时不报断线
+        sys.SensorOut = 0;
+        sys.sensor_err = 0;
+        sys.Sensor_OverFlow = 0;
+        sys.sensor_value_valid = 0;
+        return;
+    }
+#endif
     if (config.Sensor_Mode == CTROLTYPE_PUMP) // sensor is installed on upper tank
     {
 
@@ -463,6 +590,9 @@ void shuiwei_check(void)
             Speak_Con(5);
         }
     }
+#if (Model_OUT == Model_1C1)
+    sys.sensor_value_valid = (analog_mode && !sys.sensor_err); //20261114-1 add
+#endif
 }
 
 void RELAY_Auto_Control(void)
@@ -656,7 +786,12 @@ void RELAY_Auto_Control(void)
             }
         }
 
+#if (Model_OUT == Model_1C1)
+        if (sys.sensor_err || (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA &&
+                               !sys.sensor_value_valid)) //20261114-1 change 未收到有效连续量时禁止自动开泵
+#else
         if (sys.sensor_err)
+#endif
         {
             sys.Pump_Flag = 0;
         }

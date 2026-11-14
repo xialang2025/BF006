@@ -172,13 +172,25 @@ u16 get_reg(u8 addr)
         res = 0;
         break;
     case 7:
+#if (Model_OUT == Model_1C1)
+        res = Sensor_Legacy_Value(sys.Sensor_ON2); //20261114-1 change 旧寄存器超界时返回无效码
+#else
         res = sys.Sensor_ON2;
+#endif
         break;
     case 8:
+#if (Model_OUT == Model_1C1)
+        res = Sensor_Legacy_Value(sys.Sensor_STOP); //20261114-1 change 旧寄存器超界时返回无效码
+#else
         res = sys.Sensor_STOP;
+#endif
         break;
     case 9:
+#if (Model_OUT == Model_1C1)
+        res = Sensor_Legacy_Reading(); //20261114-1 change 旧寄存器超界时返回无效码
+#else
         res = sys.SensorOut;
+#endif
         break;
 
     case 10:
