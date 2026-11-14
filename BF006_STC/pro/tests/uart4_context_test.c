@@ -1,6 +1,7 @@
 #include "snapshot4g.h"
 #include "uart4.h"
 #include "Modbus_New.h"
+#include "user.h"
 
 volatile u8 xdata Test_Result _at_ 0x0BFE;
 static u8 xdata frame[55];
@@ -322,6 +323,34 @@ void main(void) //20261114-6 add
     frame[47] = 124;
     Exchange(50, 50);
     if (reply[8] != 0x24 || config.Sensor_STOP != 123) {
+        Test_Done();
+    }
+
+    Test_Result = 41;
+    Limit_Current = 130;
+    config.UVP_Value = VoltageValue == Vol_380 ? 320 : 150;
+    config.OVP_Value = VoltageValue == Vol_380 ? 480 : 260;
+    config.Set_OVERLOAD_Current1 = 100;
+    frame[9] = 43;
+    frame[31] = 2;
+    frame[32] = 4;
+    memset(&frame[33], 0, 20);
+    frame[33] = 21;
+    frame[36] = config.UVP_Value >> 8;
+    frame[37] = (u8)config.UVP_Value;
+    frame[38] = 22;
+    frame[41] = config.OVP_Value >> 8;
+    frame[42] = (u8)config.OVP_Value;
+    frame[43] = 23;
+    frame[47] = 100;
+    frame[48] = 24;
+    Exchange(55, 50);
+    if (reply[8] || reply[31] != 4) {
+        Test_Done();
+    }
+    frame[37] ^= 1;
+    Exchange(55, 50);
+    if (reply[8] != 0x2F || config.Sensor_STOP != 123 || config.Set_OVERLOAD_Current1 != 100) {
         Test_Done();
     }
     Test_Result = 0;

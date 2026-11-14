@@ -355,13 +355,55 @@ static u8 Snapshot_Check_Water_Group(u8 *change) //20261114-9 add
 }
 
 /******************************************************************************
+ * 函数名称       : Snapshot_Check_Protection_Group
+ * 功能描述       : 核对四项保护目标是否与当前机型的默认值一致。
+ * 输入参数       : change 用于返回是否有实质变更
+ * 返回值         : 协议拒绝码或零
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Check_Protection_Group(u8 *change) //20261114-10 add
+{
+    static const u16 code defaults[] = {
+        VoltageValue == Vol_380 ? 320 : 150,
+        VoltageValue == Vol_380 ? 480 : 260,
+        100, 0,
+    };
+    u8 i;
+    u8 offset;
+    u32 value;
+
+    if (uart4_frame[9] != 43 || uart4_frame[32] != 4) {
+        return 3;
+    }
+    for (i = 0; i < 4; i++) {
+        offset = 33 + i * 5;
+        if (uart4_frame[offset] != 21 + i) {
+            return 3;
+        }
+        value = Snapshot_Get32(offset + 1);
+        if (value > 0xFFFFUL) {
+            return 0x2A;
+        }
+        if (value != defaults[i]) {
+            return 0x2F;
+        }
+    }
+    if (Limit_Current < defaults[2]) {
+        return 0x30;
+    }
+    *change = config.UVP_Value != defaults[0] || config.OVP_Value != defaults[1] ||
+              config.Set_OVERLOAD_Current1 != defaults[2] || config.Set_STANDBY_Current1 != defaults[3];
+    return 0;
+}
+
+/******************************************************************************
  * 函数名称       : Snapshot_Setting_Reply
  * 功能描述       : 验证单写并返回实际值，存储尚未接入时拒绝改变配置。
  * 输入参数       : length 返回的数据区长度
  * 返回值         : 协议结果码
  * 日期            : 2026.11.14
  ******************************************************************************/
-static u8 Snapshot_Setting_Reply(u8 *length) //20261114-9 change
+static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
 {
     u8 field;
     u8 mode;
@@ -390,9 +432,12 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-9 change
     flags = 1;
     phase = 1;
     minimum = maximum = 0;
-    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
-    if (!Snapshot_Read_Field(field, &actual)) {
-        flags |= 2;
+    actual = 0;
+    if (!group) {
+        Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
+        if (!Snapshot_Read_Field(field, &actual)) {
+            flags |= 2;
+        }
     }
     if (mode > 1) {
         result = 0x33;
@@ -410,7 +455,17 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-9 change
         result = 0x21;
     } else if (group) {
         changed = 0;
-        result = uart4_frame[31] == 1 ? Snapshot_Check_Water_Group(&changed) : 0x02;
+        switch (uart4_frame[31]) {
+        case 1:
+            result = Snapshot_Check_Water_Group(&changed);
+            break;
+        case 2:
+            result = Snapshot_Check_Protection_Group(&changed);
+            break;
+        default:
+            result = 0x02;
+            break;
+        }
         if (!result) {
             if (changed) {
                 result = 0x30;
@@ -430,6 +485,9 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-9 change
                 result = 0x30;
             }
         }
+    }
+    if (group) {
+        Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
     }
     memmove(&uart4_frame[11], &uart4_frame[10], 8);
     memset(&uart4_frame[19], 0, 29);
