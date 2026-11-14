@@ -7,21 +7,15 @@
 #include "Modbus_New.h"
 #include "string.h"
 
-#if (Function_RS485 == 1)
-#if (MODBUS_USE_OLD_PROTOCOL == 0)
-
-struct Uart_Type RecData; //20260430-0 add RX buffer used by the new protocol, keeping the old UART driver reference unchanged
-
-extern void Record_Clr_and_Reset(void);
-
+#if (Model_OUT == Model_1C1) || (Function_RS485 == 1 && MODBUS_USE_OLD_PROTOCOL == 0)
 /******************************************************************************
- * Function       : modbus_new_crc16
- * Description       : Calculate the standard Modbus RTU CRC16 value.
- * Input       : buf,len
- * Return         : crc
- * Date            : 2026.04.30
+ * 函数名称       : BF006_Modbus_CRC
+ * 功能描述       : 计算现场串口和快照共用的循环冗余校验。
+ * 输入参数       : buf 帧内容，len 校验长度
+ * 返回值         : 校验值
+ * 日期            : 2026.11.14
  ******************************************************************************/
-static u16 modbus_new_crc16(u8 *buf, u8 len) //20260430-0 add
+u16 BF006_Modbus_CRC(u8 *buf, u8 len) //20261114-2 change
 {
     u8 i;
     u8 j;
@@ -48,6 +42,76 @@ static u16 modbus_new_crc16(u8 *buf, u8 len) //20260430-0 add
 }
 
 /******************************************************************************
+ * 函数名称       : BF006_Device_Spec
+ * 功能描述       : 按现行过载设定返回设备规格低字节。
+ * 输入参数       : None
+ * 返回值         : 设备规格编码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u8 BF006_Device_Spec(void) //20261114-2 change
+{
+    u8 spec;
+
+    spec = 0x93;
+    if (config.Set_OVERLOAD_Current1 == V1_Set_Current)
+    {
+        spec = 0x90;
+    }
+    else if (config.Set_OVERLOAD_Current1 == V2_Set_Current)
+    {
+        spec = 0x91;
+    }
+    else if (config.Set_OVERLOAD_Current1 == V3_Set_Current)
+    {
+        spec = 0x92;
+    }
+    else if (config.Set_OVERLOAD_Current1 == V5_Set_Current)
+    {
+        spec = 0x94;
+    }
+
+    return spec;
+}
+
+/******************************************************************************
+ * 函数名称       : BF006_Fault_Code
+ * 功能描述       : 查找当前故障位图中优先级最高的已定义故障。
+ * 输入参数       : faults 完整故障位图
+ * 返回值         : 对外故障码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u16 BF006_Fault_Code(u32 faults) //20261114-2 change
+{
+    u8 i;
+    u32 mask;
+
+    if (faults == 0)
+    {
+        return 0;
+    }
+
+    for (i = 0; i < ERR_NUMB; i++)
+    {
+        mask = (u32)1 << i;
+        if ((faults & mask) != 0)
+        {
+            return (u16)(i + 1);
+        }
+    }
+
+    return 0;
+}
+
+#endif
+
+#if (Function_RS485 == 1)
+#if (MODBUS_USE_OLD_PROTOCOL == 0)
+
+struct Uart_Type RecData; //20260430-0 add RX buffer used by the new protocol, keeping the old UART driver reference unchanged
+
+extern void Record_Clr_and_Reset(void);
+
+/******************************************************************************
  * Function       : modbus_new_crc_ok
  * Description       : Check whether the CRC at the end of the received frame is valid.
  * Input       : buf,len
@@ -63,7 +127,7 @@ static u8 modbus_new_crc_ok(u8 *buf, u8 len) //20260430-0 add
         return 0;
     }
 
-    crc = modbus_new_crc16(buf, len - 2);
+    crc = BF006_Modbus_CRC(buf, len - 2);
     if ((buf[len - 2] == (u8)(crc & 0x00ff)) && (buf[len - 1] == (u8)(crc >> 8)))
     {
         return 1;
@@ -83,7 +147,7 @@ static void modbus_new_send_with_crc(u8 *buf, u8 len) //20260430-0 add
 {
     u16 crc;
 
-    crc = modbus_new_crc16(buf, len);
+    crc = BF006_Modbus_CRC(buf, len);
     buf[len] = (u8)(crc & 0x00ff);
     buf[len + 1] = (u8)(crc >> 8);
     M_Uart_Send_Block(buf, len + 2);
@@ -378,67 +442,6 @@ static void modbus_new_write_param(u16 addr, u16 value) //20260430-3 change
 }
 
 /******************************************************************************
- * Function       : modbus_new_get_device_spec
- * Description       : Generate the specification code in the low byte of the device-model register.
- * Input       : None
- * Return         : spec
- * Date            : 2026.04.30
- ******************************************************************************/
-static u8 modbus_new_get_device_spec(void) //20260430-0 add
-{
-    u8 spec;
-
-    spec = 0x93;
-    if (config.Set_OVERLOAD_Current1 == V1_Set_Current)
-    {
-        spec = 0x90;
-    }
-    else if (config.Set_OVERLOAD_Current1 == V2_Set_Current)
-    {
-        spec = 0x91;
-    }
-    else if (config.Set_OVERLOAD_Current1 == V3_Set_Current)
-    {
-        spec = 0x92;
-    }
-    else if (config.Set_OVERLOAD_Current1 == V5_Set_Current)
-    {
-        spec = 0x94;
-    }
-
-    return spec;
-}
-
-/******************************************************************************
- * Function       : modbus_new_current_fault
- * Description       : Read the current highest-priority fault code; 0 means no active fault.
- * Input       : None
- * Return         : fault_code
- * Date            : 2026.04.30
- ******************************************************************************/
-static u16 modbus_new_current_fault(void) //20260430-0 add
-{
-    u8 i;
-    u32 mask;
-
-    if (sys.Fault_Error == 0)
-    {
-        return 0;
-    }
-
-    for (i = 0; i < ERR_NUMB; i++)
-    {
-        mask = (u32)1 << i;
-        if ((sys.Fault_Error & mask) != 0)
-        {
-            return (u16)(i + 1);
-        }
-    }
-
-    return 0;
-}
-
-/******************************************************************************
  * Function       : modbus_new_run_status
  * Description       : Build the run-status register according to protocol bit definitions.
  * Input       : None
@@ -663,7 +666,7 @@ static u8 modbus_new_read_monitor(u16 addr, u16 *value) //20260713-0 change
     switch (addr)
     {
     case 0x2100:
-        *value = modbus_new_current_fault();
+        *value = BF006_Fault_Code(sys.Fault_Error);
         break;
     case 0x2101:
         *value = modbus_new_run_status();
@@ -707,7 +710,7 @@ static u8 modbus_new_read_monitor(u16 addr, u16 *value) //20260713-0 change
         break;
     case 0x210d:
         *value = Dev_Model;
-        *value = (*value << 8) + modbus_new_get_device_spec();
+        *value = (*value << 8) + BF006_Device_Spec();
         break;
     case 0x210e:
         *value = MODBUS_NEW_VERSION;

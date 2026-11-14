@@ -476,6 +476,11 @@
               <FileType>1</FileType>
               <FilePath>..\src\uart4.c</FilePath>
             </File>
+            <File>
+              <FileName>snapshot4g.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\snapshot4g.c</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>

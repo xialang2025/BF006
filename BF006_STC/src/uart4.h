@@ -1,9 +1,19 @@
 #ifndef __UART_H
 #define __UART_H	 
 
-#include	"config.h"
+#include "system.h" //20261114-2 change 按机型开放快照串口接口
 
 void uart_init(void); //20261113-0 change 保留串口四硬件初始化接口
+
+#if (Model_OUT == Model_1C1)
+#define UART4_FRAME_CAPACITY 127
+#define UART4_REQUEST_LIMIT 55
+
+extern u8 xdata uart4_frame[UART4_FRAME_CAPACITY]; //20261114-2 add 收发共享帧
+void UART4_Tick(void);
+u8 UART4_Claim(void);
+void UART4_Finish(u8 length);
+#endif
 
 #if 0 //20261113-0 del 封存旧协议的串口缓冲区、计数和收发接口声明。
 #define	COM_TX4_Lenth	512

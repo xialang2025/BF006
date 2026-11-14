@@ -76,10 +76,16 @@ void Record_Clr_and_Reset(void)
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-void updatSysdata(void) //20261114-1 change
+void updatSysdata(void) //20261114-2 change
 {
 #if (Model_OUT == Model_1C1)
-    sys.Sensor_Rang = (u32)config.Sensor_Rang * 10UL;
+    u32 range;
+
+    range = (u32)config.Sensor_Rang * 10UL;
+    if (range != sys.Sensor_Rang) { //20261114-2 add 换算所用量程变化后等待工程值重新发布
+        sys.sensor_value_valid = 0;
+    }
+    sys.Sensor_Rang = range;
     sys.Sensor_STOP = (u32)config.Sensor_STOP * 10UL;
     sys.Sensor_ON1 = (u32)config.Sensor_ON1 * 10UL;
     sys.Sensor_ON2 = (u32)config.Sensor_ON2 * 10UL;

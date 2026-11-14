@@ -1,6 +1,6 @@
 #include "system.h"
 #include "ad.h"
-//20261113-0 del 封存旧串口接收超时接口引用：#include "uart4.h"
+#include "uart4.h" //20261114-2 change 由定时中断维护快照分帧
 
 #define	Timer0_Reload	(MAIN_Fosc / 1000)		//Timer 0 中断频率, 1000HZ
 #define	Timer1_Reload	(MAIN_Fosc / 10000)		//Timer 0 中断频率, 10000HZ
@@ -67,7 +67,9 @@ void TIM0_IRQHandler (void) interrupt TIMER0_VECTOR
 	MEASURE_Pro();	
 
     Timer_dis3_Cnt++;
-	//20261113-0 del 停用旧协议的接收超时分帧：UART4_RX_CNT();
+#if (Model_OUT == Model_1C1)
+    UART4_Tick(); //20261114-2 add 使用真实的一毫秒节拍判断静默
+#endif
     if(Timer_dis3_Cnt>=10)
     {
         Timer_dis3_Cnt = 0;

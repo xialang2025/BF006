@@ -8,7 +8,8 @@
 #include "configPar.h"
 #include "RS485.h"
 #include "modbus.h"
-#include "uart4.h" //20261113-0 change 由主函数直接配置串口四
+#include "uart4.h" //20261114-2 change 由主函数直接配置串口四
+#include "snapshot4g.h" //20261114-2 add
 
 /******************** 主函数 **************************/
 void main(void)
@@ -40,8 +41,6 @@ void main(void)
 #if (Function_RS485 == 1)
         Modbus_analysis();
 #endif
-
-        //20261113-0 del 封存旧协议的接收解析入口：Analyse_4G();
 
         //模拟量采集
 //		MEASURE_Pro();
@@ -136,6 +135,9 @@ void main(void)
 #endif
         }
 
+#if (Model_OUT == Model_1C1)
+        Snapshot4G_Process(); //20261114-2 add 完成本轮运行及显示更新后才取快照
+#endif
     }
 }
 

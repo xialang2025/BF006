@@ -52,6 +52,10 @@
 #define MODBUS_NEW_PUMP_TARGET_B 0x02
 #define MODBUS_NEW_PUMP_TARGET_AB 0x03
 
+u16 BF006_Modbus_CRC(u8 *buf, u8 len); //20261114-2 add 现场串口与快照共用
+u8 BF006_Device_Spec(void);
+u16 BF006_Fault_Code(u32 faults);
+
 void Modbus_Receive_handle(u8 rdata);
 void Modbus_Timer_handle(void);
 void Modbus_analysis(void);

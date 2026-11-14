@@ -10,6 +10,9 @@
 #define Function_RF 1
 #define Function_RS485 1
 
+#define SNAPSHOT_VOLTAGE_VALID 1
+#define SNAPSHOT_CURRENT_VALID 2
+
 #define CUSTOMER_TEST_LIMIT_ENABLE  0    //20260501-0 add customer test time-limit fault switch: 0 off, 1 on
 #define CUSTOMER_TEST_LIMIT_MINUTE  120  //20260501-0 add customer test time limit in minutes
 
@@ -223,6 +226,7 @@ typedef struct{
 	volatile u16 Cur_AD;
 	volatile u8 sensor_adc_ready; //20261114-1 add 本传感器类型已收到一批采样
 	u8 sensor_value_valid;        // 当前工程值已发布且输入正常
+	volatile u8 snapshot_adc_valid; //20261114-2 add 电压及三相电流的首批采样标志
 #else
 	u16 Vol_AD;
 	u16 Cur_AD;

@@ -183,6 +183,9 @@ void MEASURE_Sample(void)
                 Sum_Vol >>= 2;
                 Sum_Vol_cnt = 0;
                 sys.Voltage_Line = Sum_Vol * 98 / 100;
+#if (Model_OUT == Model_1C1)
+                sys.snapshot_adc_valid |= SNAPSHOT_VOLTAGE_VALID; //20261114-2 add 电压批次发布后才报告有效
+#endif
                 Sum_Vol = 0;
             }
             if (Measure_flag.bits.finish)
@@ -239,6 +242,7 @@ void MEASURE_Sample(void)
                     sys.Vol_AD = Result_AD[7];
 #if (Model_OUT == Model_1C1)
                     sys.sensor_adc_ready = 1; //20261114-1 add 两路模拟量均写完后发布采样
+                    sys.snapshot_adc_valid |= SNAPSHOT_CURRENT_VALID; //20261114-2 add 各支持相的电流已发布
 #endif
 #if (Model_Voltage == Model_3PH)
                     u32Temp = sys.Current_A1 + sys.Current_B1 + sys.Current_C1;

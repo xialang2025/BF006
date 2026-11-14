@@ -1,6 +1,21 @@
 #include "uart4.h"
 //20261113-0 del 封存旧串口状态清零所用头文件：#include "string.h"
 
+#if (Model_OUT == Model_1C1)
+#define UART4_IDLE_TICKS 11 // 跨越十个完整毫秒后判定静默
+#define UART4_RX 0
+#define UART4_READY 1
+#define UART4_OWNED 2
+#define UART4_TX 3
+#define UART4_DROP 4
+
+u8 xdata uart4_frame[UART4_FRAME_CAPACITY]; //20261114-2 add 收帧、组包及发送依次使用
+static volatile u8 uart4_state;
+static volatile u8 uart4_idle;
+static volatile u8 uart4_count;
+static u8 uart4_tx_next;
+#endif
+
 #define	BaudRate4		9600UL	//20261113-1 change 串口四使用九千六百波特，八位数据、无校验、一位停止位
 #define Timer4_Reload	(65536UL -(MAIN_Fosc / 4 / BaudRate4)) //20261113-0 change 定时器四重装值，溢出频率为波特率的四倍
 #if 0 //20261113-0 del 释放旧串口的收发缓冲区、指针及接收超时状态。
@@ -20,6 +35,11 @@ u8 	xdata RX4_Buffer[COM_RX4_Lenth];	//接收缓冲
  ******************************************************************************/
 void uart_init(void) //20261113-0 change
 {
+#if (Model_OUT == Model_1C1)
+    uart4_state = UART4_RX; //20261114-2 add 仅在开放串口中断前初始化所有权
+    uart4_count = 0;
+    uart4_idle = 0;
+#endif
     S4_8bit();				//8位数据
     S4_USE_P52P53();
     S4_BRT_UseTimer4();
@@ -101,21 +121,125 @@ void UART4_RX_CNT(void)
 }
 #endif
 
+#if (Model_OUT == Model_1C1)
 /******************************************************************************
- * 函数名称       : UART4_int
- * 功能描述       : 在新协议接入前丢弃串口四收到的字节，并清除串口中断标志。
+ * 函数名称       : UART4_Tick
+ * 功能描述       : 在一毫秒中断中结束收帧或解除丢弃状态。
  * 输入参数       : None
  * 返回值         : None
- * 日期            : 2026.11.13
+ * 日期            : 2026.11.14
  ******************************************************************************/
-void UART4_int(void) interrupt UART4_VECTOR //20261113-0 add
+void UART4_Tick(void) //20261114-2 add
 {
+    if (RI4 || uart4_idle == 0 || --uart4_idle != 0) { // 接收中断待处理时仍有数据到达
+        return;
+    }
+
+    if (uart4_state == UART4_RX) {
+        uart4_state = UART4_READY;
+    } else if (uart4_state == UART4_DROP) {
+        uart4_count = 0;
+        uart4_state = UART4_RX;
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : UART4_Claim
+ * 功能描述       : 将已分帧的缓冲交给主循环。
+ * 输入参数       : None
+ * 返回值         : 已收帧长度，零表示无可处理帧
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u8 UART4_Claim(void) //20261114-2 add
+{
+    if (uart4_state != UART4_READY) {
+        return 0;
+    }
+    uart4_state = UART4_OWNED; // 接收与计时中断均不改动就绪状态和帧内容
+    return uart4_count;
+}
+
+/******************************************************************************
+ * 函数名称       : UART4_Finish
+ * 功能描述       : 放弃本帧或启动中断发送应答。
+ * 输入参数       : length 应答长度，零表示静默结束
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void UART4_Finish(u8 length) //20261114-2 add
+{
+    bit interrupt_enabled;
+
+    interrupt_enabled = EA;
+    EA = 0;
+    uart4_count = length;
+    if (length != 0) {
+        uart4_tx_next = 1;
+        uart4_state = UART4_TX;
+        CLR_TI4();
+        S4BUF = uart4_frame[0]; // 首字节送出后，由发送中断推进
+    } else if (uart4_idle != 0) {
+        uart4_state = UART4_DROP;
+    } else {
+        uart4_state = UART4_RX;
+    }
+    EA = interrupt_enabled;
+}
+
+/******************************************************************************
+ * 函数名称       : UART4_int
+ * 功能描述       : 搬运收发字节并处理接收边界，一控二清除中断标志。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void UART4_int(void) interrupt UART4_VECTOR //20261114-2 change
+{
+    u8 received;
+
     if (RI4) {
-        ACC = S4BUF; // 通过累加器读取并丢弃接收字节，避免分配缓冲区
-        CLR_RI4();   // 清除本次接收中断标志
+        received = S4BUF;
+        CLR_RI4();
+        uart4_idle = UART4_IDLE_TICKS;
+        if (uart4_state == UART4_RX) {
+            if (uart4_count < UART4_REQUEST_LIMIT) {
+                uart4_frame[uart4_count++] = received;
+                if (uart4_count == 10 && uart4_frame[5] != 1 &&
+                    (uart4_frame[8] != 0 || uart4_frame[9] > UART4_REQUEST_LIMIT - 12)) {
+                    uart4_state = UART4_DROP; // 新格式声明长度超过最大请求
+                }
+            } else {
+                uart4_state = UART4_DROP; // 收到第五十六字节，等待完整静默
+            }
+        }
     }
 
     if (TI4) {
-        CLR_TI4();   // 清除发送中断标志，保持发送端空闲
+        CLR_TI4();
+        if (uart4_state == UART4_TX) {
+            if (uart4_tx_next < uart4_count) {
+                S4BUF = uart4_frame[uart4_tx_next++];
+            } else {
+                uart4_count = 0;
+                if (uart4_idle != 0) {
+                    uart4_state = UART4_DROP; // 发送期间来的字节已丢弃
+                } else {
+                    uart4_state = UART4_RX;
+                }
+            }
+        }
     }
 }
+#else
+void UART4_int(void) interrupt UART4_VECTOR
+{
+    if (RI4) {
+        ACC = S4BUF; // 一控二继续读出并丢弃接收字节
+        CLR_RI4();
+    }
+
+    if (TI4) {
+        CLR_TI4();
+    }
+}
+#endif
