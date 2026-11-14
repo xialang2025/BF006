@@ -181,6 +181,37 @@ static void Snapshot_Write_Data(u8 base) //20261114-6 change
 
 extern u8 Snapshot_Test_Context(u32 *boot, u32 *revision, u32 *uptime);
 static u32 Snapshot_Get32(u8 offset);
+static u32 context_boot = 0;
+static u32 context_time = 0;
+static u8 context_lost = 0;
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Context
+ * 功能描述       : 阻止时钟回退或身份回退后继续使用旧执行上下文。
+ * 输入参数       : boot 代次，revision 配置版本，now 当前毫秒数
+ * 返回值         : 可用时返回一
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Context(u32 *boot, u32 *revision, u32 *now) //20261114-12 add
+{
+    if (!Snapshot_Test_Context(boot, revision, now) || !*boot || !*revision ||
+        *revision == 0xFFFFFFFFUL || *boot < context_boot) {
+        return 0;
+    }
+    if (*boot > context_boot) {
+        context_boot = *boot;
+        context_time = *now;
+        context_lost = 0;
+    } else if (*now < context_time) {
+        context_lost = 1;
+        if (sys.Pump_A_ON && !sys.Pump_A_state) {
+            sys.Pump_A_ON = 0; // 避免失去时基后仍执行尚未达到的启动请求
+        }
+    } else {
+        context_time = *now;
+    }
+    return !context_lost;
+}
 
 /******************************************************************************
  * 函数名称       : Snapshot_Read_Field
@@ -421,7 +452,7 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
     u32 maximum;
     u32 actual;
 
-    if (!Snapshot_Test_Context(&boot, &revision, &now)) {
+    if (!Snapshot_Context(&boot, &revision, &now)) {
         return SNAPSHOT_CONTEXT_UNAVAILABLE;
     }
     group = uart4_frame[5] == 0x12;
@@ -528,7 +559,7 @@ static u8 Snapshot_Field_Reply(u8 *length) //20261114-6 add
     u32 uptime;
     u32 actual;
 
-    if (!Snapshot_Test_Context(&boot, &revision, &uptime)) {
+    if (!Snapshot_Context(&boot, &revision, &uptime)) {
         return SNAPSHOT_CONTEXT_UNAVAILABLE;
     }
     field = uart4_frame[10];
@@ -573,7 +604,7 @@ typedef struct {
 
 static Control_Record xdata controls[2];
 static u8 xdata control_high_water[8];
-static u32 control_boot;
+static u32 control_boot = 0;
 
 /******************************************************************************
  * 函数名称       : Snapshot_Get32
@@ -659,7 +690,7 @@ static u8 Control_Reply(u8 *length) //20261114-11 change
     u32 now;
     u32 deadline;
 
-    if (!Snapshot_Test_Context(&boot, &revision, &now) || !boot || !revision) {
+    if (!Snapshot_Context(&boot, &revision, &now)) {
         return SNAPSHOT_CONTEXT_UNAVAILABLE;
     }
     if (boot != control_boot) {
@@ -703,7 +734,8 @@ static u8 Control_Reply(u8 *length) //20261114-11 change
             }
         } else if (query || memcmp(&uart4_frame[10], control_high_water, 8) <= 0) {
             result = 0x2C;
-        } else if (deadline <= now || deadline - now > 10000UL) {
+        } else if (deadline <= now || deadline - now > 10000UL ||
+                   (action != 2 && now > 0xFFFFFFFFUL - 5000UL)) {
             result = 0x2E;
         } else if (action != 2 && Snapshot_Get32(22) != revision) {
             result = 0x26;

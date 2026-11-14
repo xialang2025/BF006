@@ -8,6 +8,7 @@ static u8 xdata frame[55];
 static u8 xdata reply[127];
 static u8 xdata baseline[77];
 static u32 simulated_time = 60000;
+static u32 simulated_boot = 1;
 
 extern void UART4_int(void);
 
@@ -33,7 +34,7 @@ void M_Uart_Send_Block(u8 *bytes, u8 length)
  ******************************************************************************/
 u8 Snapshot_Test_Context(u32 *boot, u32 *revision, u32 *uptime)
 {
-    *boot = 1;
+    *boot = simulated_boot;
     *revision = 7;
     *uptime = simulated_time;
     return 1;
@@ -107,6 +108,8 @@ void main(void) //20261114-6 add
     u32 actual;
 
     sys_init();
+    simulated_boot = 1;
+    simulated_time = 60000;
     memset(&config, 0, sizeof(config));
     config.Dev_Address = 1;
     config.Sensor_Rang = 9999;
@@ -377,6 +380,41 @@ void main(void) //20261114-6 add
     frame[17] = 5;
     Exchange(34, 50);
     if (reply[8] || !sys.Pump_A_ON) {
+        Test_Done();
+    }
+
+    Test_Result = 43;
+    simulated_time = 65020;
+    Exchange(34, 50);
+    if (reply[8] != 0x34 || reply[31] != 6 || sys.Pump_A_ON) {
+        Test_Done();
+    }
+    sys.Pump_A_state = 1;
+    Exchange(34, 50);
+    if (reply[8] != 0x34 || reply[31] != 6 || !(reply[32] & 32)) {
+        Test_Done();
+    }
+
+    Test_Result = 44;
+    simulated_time = 10;
+    Exchange(34, 13);
+    if (reply[8] != 0x32) {
+        Test_Done();
+    }
+    simulated_boot = 2;
+    Exchange(34, 50);
+    if (reply[8] != 0x27 || reply[22] != 2) {
+        Test_Done();
+    }
+    Test_Result = 45;
+    simulated_time = 0xFFFFF000UL;
+    frame[21] = 2;
+    frame[26] = 0xFF;
+    frame[27] = 0xFF;
+    frame[28] = 0xFF;
+    frame[29] = 0xFF;
+    Exchange(34, 50);
+    if (reply[8] != 0x2E || reply[31] != 1) {
         Test_Done();
     }
     Test_Result = 0;
