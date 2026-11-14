@@ -562,6 +562,25 @@ static u8 Snapshot_Submit_Water_Group(void) //20261114-18 add
     Config_Panel_Encode(3, CONFIG_OFFSET(Sensor_STOP), (u16)Snapshot_Get32(44), 2);
     return Config_Submit(5);
 }
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Submit_Protection_Group
+ * 功能描述       : 一次提交经过核对的四项保护值。
+ * 输入参数       : None
+ * 返回值         : 保存状态
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Submit_Protection_Group(void) //20261114-19 add
+{
+    if (!Config_Panel_Available()) {
+        return CONFIG_STORE_LOCKED;
+    }
+    Config_Panel_Encode(0, CONFIG_OFFSET(UVP_Value), (u16)Snapshot_Get32(34), 2);
+    Config_Panel_Encode(2, CONFIG_OFFSET(OVP_Value), (u16)Snapshot_Get32(39), 2);
+    Config_Panel_Encode(4, CONFIG_OFFSET(Set_OVERLOAD_Current1), (u16)Snapshot_Get32(44), 2);
+    Config_Panel_Encode(6, CONFIG_OFFSET(Set_STANDBY_Current1), (u16)Snapshot_Get32(49), 2);
+    return Config_Submit(8);
+}
 #endif
 
 /******************************************************************************
@@ -697,8 +716,14 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
                 phase = 1;
             } else {
                 if (result == 0x30 && ((!group && (flags & 12) == 12) ||
-                    (group && uart4_frame[31] == 1 && changed))) {
-                    submitted = group ? Snapshot_Submit_Water_Group() : Snapshot_Submit_Setting(field, (u16)value);
+                    (group && changed))) {
+                    if (!group) {
+                        submitted = Snapshot_Submit_Setting(field, (u16)value);
+                    } else if (uart4_frame[31] == 1) {
+                        submitted = Snapshot_Submit_Water_Group();
+                    } else {
+                        submitted = Snapshot_Submit_Protection_Group();
+                    }
                     if (submitted == CONFIG_STORE_BUSY) {
                         result = 0;
                         phase = 2;

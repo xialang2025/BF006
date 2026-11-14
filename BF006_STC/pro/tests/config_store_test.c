@@ -148,7 +148,7 @@ static void Read_Board_Context(void) //20261114-15 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state) //20261114-18 change
+static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state) //20261114-19 change
 {
     u8 frame[55];
     u8 i;
@@ -180,6 +180,20 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state)
             frame[42] = 20;
             frame[43] = 19;
             frame[47] = 90;
+            if (id == 4) {
+                frame[9] = 43;
+                frame[31] = 2;
+                frame[32] = 4;
+                frame[33] = 21;
+                frame[36] = VoltageValue == Vol_380 ? 1 : 0;
+                frame[37] = VoltageValue == Vol_380 ? 64 : 150;
+                frame[38] = 22;
+                frame[41] = 1;
+                frame[42] = VoltageValue == Vol_380 ? 224 : 4;
+                frame[43] = 23;
+                frame[47] = 100;
+                frame[48] = 24;
+            }
         }
     }
     length = frame[9] + 12;
@@ -523,6 +537,24 @@ void main(void) //20261114-4 add
     Par_Init();
     if (config.Sensor_Mode != CTROLTYPE_PUMP || config.Sensor_ON1 != 20 || config.Sensor_STOP != 90 ||
         config.Sensor_Rang != 200) {
+        Test_Done();
+    }
+
+    Test_Result = 18;
+    mutations = 0;
+    Board_Mode_Request(0x12, 4, 2, 1);
+    if (config.UVP_Value || config.OVP_Value || config.Set_OVERLOAD_Current1) {
+        Test_Done();
+    }
+    for (loop = 0; loop < 300; loop++) {
+        Config_Background();
+    }
+    Board_Mode_Request(0x13, 4, 3, 1);
+    sys_init();
+    Par_Init();
+    if (config.UVP_Value != (VoltageValue == Vol_380 ? 320 : 150) ||
+        config.OVP_Value != (VoltageValue == Vol_380 ? 480 : 260) ||
+        config.Set_OVERLOAD_Current1 != 100 || config.Set_STANDBY_Current1 || config.Sensor_Rang != 200) {
         Test_Done();
     }
 
