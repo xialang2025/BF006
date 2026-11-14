@@ -43,11 +43,11 @@ static void Snapshot_Put32(u8 offset, u32 value) //20261114-2 add
 /******************************************************************************
  * 函数名称       : Snapshot_Write_Data
  * 功能描述       : 在共享帧中构造同一逻辑采样点的二十八项快照。
- * 输入参数       : None
+ * 输入参数       : base 快照块起点
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Snapshot_Write_Data(void) //20261114-2 add
+static void Snapshot_Write_Data(u8 base) //20261114-6 change
 {
     bit interrupt_enabled;
     u8 adc_valid;
@@ -100,20 +100,20 @@ static void Snapshot_Write_Data(void) //20261114-2 add
     water_direction = config.Sensor_Mode;
     if (!sys.sensor_value_valid || sensor_type != sys.Auto_Mode) {
         valid &= ~0x0800UL;
-        Snapshot_Put32(39, 0xFFFFFFFFUL);
+        Snapshot_Put32(base + 28, 0xFFFFFFFFUL);
     } else {
-        Snapshot_Put32(39, sys.SensorOut);
+        Snapshot_Put32(base + 28, sys.SensorOut);
     }
-    Snapshot_Put32(11, supported);
-    Snapshot_Put32(15, valid);
-    Snapshot_Put16(19, voltage);
-    Snapshot_Put16(21, current_a);
+    Snapshot_Put32(base + 0, supported);
+    Snapshot_Put32(base + 4, valid);
+    Snapshot_Put16(base + 8, voltage);
+    Snapshot_Put16(base + 10, current_a);
 #if (Model_Voltage == Model_3PH)
-    Snapshot_Put16(23, current_b);
-    Snapshot_Put16(25, current_c);
+    Snapshot_Put16(base + 12, current_b);
+    Snapshot_Put16(base + 14, current_c);
 #else
-    Snapshot_Put16(23, SNAPSHOT_INVALID);
-    Snapshot_Put16(25, SNAPSHOT_INVALID);
+    Snapshot_Put16(base + 12, SNAPSHOT_INVALID);
+    Snapshot_Put16(base + 14, SNAPSHOT_INVALID);
 #endif
 
     pump_status = 0;
@@ -131,20 +131,20 @@ static void Snapshot_Write_Data(void) //20261114-2 add
     if (sys.Pump_A_state) {
         pump_status |= 0x10;
     }
-    Snapshot_Put16(27, pump_status);
+    Snapshot_Put16(base + 16, pump_status);
     faults = sys.Fault_Error; // 故障码和完整故障位图使用同一原值
-    Snapshot_Put16(29, BF006_Fault_Code(faults));
-    Snapshot_Put32(31, faults);
+    Snapshot_Put16(base + 18, BF006_Fault_Code(faults));
+    Snapshot_Put32(base + 20, faults);
 
-    uart4_frame[35] = (LCD_WATER_Hlevel1 ? 1 : 0) | (LCD_WATER_Hlevel2 ? 2 : 0) |
+    uart4_frame[base + 24] = (LCD_WATER_Hlevel1 ? 1 : 0) | (LCD_WATER_Hlevel2 ? 2 : 0) |
                       (LCD_WATER_Hlevel3 ? 4 : 0) | (LCD_WATER_Hlevel4 ? 8 : 0) |
                       (LCD_WATER_Hlevel5 ? 16 : 0) | (LCD_WATER_Hlevel6 ? 32 : 0);
-    uart4_frame[36] = (LCD_WATER_Llevel1 ? 1 : 0) | (LCD_WATER_Llevel2 ? 2 : 0) |
+    uart4_frame[base + 25] = (LCD_WATER_Llevel1 ? 1 : 0) | (LCD_WATER_Llevel2 ? 2 : 0) |
                       (LCD_WATER_Llevel3 ? 4 : 0) | (LCD_WATER_Llevel4 ? 8 : 0) |
                       (LCD_WATER_Llevel5 ? 16 : 0) | (LCD_WATER_Llevel6 ? 32 : 0);
-    uart4_frame[37] = sys.shang_shuiwei;
-    uart4_frame[38] = sys.xia_shuiwei;
-    uart4_frame[43] = water_direction;
+    uart4_frame[base + 26] = sys.shang_shuiwei;
+    uart4_frame[base + 27] = sys.xia_shuiwei;
+    uart4_frame[base + 32] = water_direction;
     display_status = sys.sensor_err ? 1 : 0;
     if (Dis7_Flash == 1 || sys.shang_shuiwei == 2) {
         display_status |= 8;
@@ -152,27 +152,124 @@ static void Snapshot_Write_Data(void) //20261114-2 add
     if (Dis8_Flash == 1) {
         display_status |= 16;
     }
-    Snapshot_Put16(44, display_status);
-    uart4_frame[46] = sensor_type;
-    uart4_frame[47] = water_direction;
+    Snapshot_Put16(base + 33, display_status);
+    uart4_frame[base + 35] = sensor_type;
+    uart4_frame[base + 36] = water_direction;
 
-    Snapshot_Put16(48, config.Sensor_Rang); // 直接报告配置单位及原始值
-    Snapshot_Put16(50, config.Sensor_ON1);
-    Snapshot_Put16(52, config.Sensor_STOP);
-    Snapshot_Put16(54, config.Sensor_overFlow);
-    Snapshot_Put16(56, config.UVP_Value);
-    Snapshot_Put16(58, config.OVP_Value);
-    Snapshot_Put16(60, config.Set_OVERLOAD_Current1);
-    Snapshot_Put16(62, config.Set_STANDBY_Current1);
-    Snapshot_Put16(64, config.AUTO_Timing_Run);
-    Snapshot_Put16(66, config.AUTO_Timing_Stop);
-    uart4_frame[68] = Dev_Model;
-    uart4_frame[69] = BF006_Device_Spec();
-    Snapshot_Put16(70, MODBUS_NEW_VERSION);
-    for (offset = 72; offset < SNAPSHOT_HEADER_SIZE + SNAPSHOT_DATA_SIZE; offset++) {
-        uart4_frame[offset] = 0;
+    Snapshot_Put16(base + 37, config.Sensor_Rang); // 直接报告配置单位及原始值
+    Snapshot_Put16(base + 39, config.Sensor_ON1);
+    Snapshot_Put16(base + 41, config.Sensor_STOP);
+    Snapshot_Put16(base + 43, config.Sensor_overFlow);
+    Snapshot_Put16(base + 45, config.UVP_Value);
+    Snapshot_Put16(base + 47, config.OVP_Value);
+    Snapshot_Put16(base + 49, config.Set_OVERLOAD_Current1);
+    Snapshot_Put16(base + 51, config.Set_STANDBY_Current1);
+    Snapshot_Put16(base + 53, config.AUTO_Timing_Run);
+    Snapshot_Put16(base + 55, config.AUTO_Timing_Stop);
+    uart4_frame[base + 57] = Dev_Model;
+    uart4_frame[base + 58] = BF006_Device_Spec();
+    Snapshot_Put16(base + 59, MODBUS_NEW_VERSION);
+    for (offset = 61; offset < SNAPSHOT_DATA_SIZE; offset++) {
+        uart4_frame[base + offset] = 0;
     }
 }
+
+#ifdef BF006_CONTEXT_SIMULATION
+#define SNAPSHOT_CONTEXT_SIZE 37
+#define SNAPSHOT_CONTEXT_DATA 48
+
+extern u8 Snapshot_Test_Context(u32 *boot, u32 *revision, u32 *uptime);
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Read_Field
+ * 功能描述       : 从同一快照提取单项值及支持和有效状态。
+ * 输入参数       : field 字段编号，actual 用于返回原始整数值
+ * 返回值         : 成功、不支持或当前无有效读数
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Read_Field(u8 field, u32 *actual) //20261114-6 add
+{
+    static const u8 code offsets[] = {8,10,12,14,16,18,20,24,25,26,27,28,32,33,35,36,
+                                     37,39,41,43,45,47,49,51,53,55,57,59,61};
+    u8 bit_index;
+    u8 bitmap_offset;
+    u8 offset;
+    u8 end;
+    u8 mask;
+
+    *actual = 0;
+    if (!field || field >= sizeof(offsets)) {
+        return 0x29;
+    }
+    bit_index = field - 1;
+    bitmap_offset = SNAPSHOT_CONTEXT_DATA + 3 - (bit_index >> 3);
+    mask = 1 << (bit_index & 7);
+    if (!(uart4_frame[bitmap_offset] & mask)) {
+        return 0x29;
+    }
+    if (!(uart4_frame[bitmap_offset + 4] & mask)) {
+        return 0x35;
+    }
+    offset = offsets[field - 1];
+    end = offsets[field];
+    while (offset < end) {
+        *actual = (*actual << 8) | uart4_frame[SNAPSHOT_CONTEXT_DATA + offset++];
+    }
+    return 0;
+}
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Field_Reply
+ * 功能描述       : 从同一次采样生成单项短应答或附完整快照的应答。
+ * 输入参数       : length 用于返回数据区长度
+ * 返回值         : 协议结果码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Field_Reply(u8 *length) //20261114-6 add
+{
+    u8 field;
+    u8 mode;
+    u8 result;
+    u8 flags;
+    u8 state;
+    u32 boot;
+    u32 revision;
+    u32 uptime;
+    u32 actual;
+
+    if (!Snapshot_Test_Context(&boot, &revision, &uptime)) {
+        return SNAPSHOT_CONTEXT_UNAVAILABLE;
+    }
+    field = uart4_frame[10];
+    mode = uart4_frame[11];
+    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
+    state = uart4_frame[SNAPSHOT_CONTEXT_DATA + 17];
+    actual = 0;
+    if (mode > 1) {
+        result = 0x33;
+    } else {
+        result = Snapshot_Read_Field(field, &actual);
+    }
+    flags = 1;
+    if (!result) {
+        flags |= 2;
+    }
+    if (mode == 1) {
+        flags |= 16;
+    }
+    memset(&uart4_frame[SNAPSHOT_HEADER_SIZE], 0, SNAPSHOT_CONTEXT_SIZE);
+    Snapshot_Put32(19, boot);
+    Snapshot_Put32(23, revision);
+    Snapshot_Put32(27, uptime);
+    uart4_frame[31] = result ? 1 : 0;
+    uart4_frame[32] = flags;
+    Snapshot_Put16(33, state);
+    uart4_frame[35] = field;
+    Snapshot_Put32(36, actual);
+    *length = SNAPSHOT_CONTEXT_SIZE + (mode == 1 ? SNAPSHOT_DATA_SIZE : 0);
+    return result;
+}
+#endif
 
 /******************************************************************************
  * 函数名称       : Snapshot4G_Process
@@ -181,7 +278,7 @@ static void Snapshot_Write_Data(void) //20261114-2 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-void Snapshot4G_Process(void) //20261114-5 change
+void Snapshot4G_Process(void) //20261114-6 change
 {
     u8 length;
     u8 result;
@@ -214,6 +311,16 @@ void Snapshot4G_Process(void) //20261114-5 change
         } else {
             result = SNAPSHOT_CONTEXT_UNAVAILABLE;
         }
+    } else if (uart4_frame[5] == 4) {
+        if (length != 14 || uart4_frame[8] || uart4_frame[9] != 2) {
+            result = 3;
+        } else {
+#ifdef BF006_CONTEXT_SIMULATION
+            result = Snapshot_Field_Reply(&data_length);
+#else
+            result = SNAPSHOT_CONTEXT_UNAVAILABLE;
+#endif
+        }
     } else if (uart4_frame[5] != SNAPSHOT_OPERATION) {
         if (length != SNAPSHOT_REQUEST_SIZE &&
             (length < 12 || uart4_frame[8] != 0 || length != uart4_frame[9] + 12)) {
@@ -223,7 +330,7 @@ void Snapshot4G_Process(void) //20261114-5 change
         }
     } else {
         data_length = SNAPSHOT_DATA_SIZE;
-        Snapshot_Write_Data();
+        Snapshot_Write_Data(SNAPSHOT_HEADER_SIZE);
     }
 
     uart4_frame[8] = result;
