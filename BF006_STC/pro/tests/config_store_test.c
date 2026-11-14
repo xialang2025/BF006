@@ -148,9 +148,9 @@ static void Read_Board_Context(void) //20261114-15 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Board_Mode_Request(u8 operation, u8 phase) //20261114-16 add
+static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state) //20261114-17 change
 {
-    u8 frame[34];
+    u8 frame[38];
     u8 i;
     u8 length;
     u8 value;
@@ -163,13 +163,14 @@ static void Board_Mode_Request(u8 operation, u8 phase) //20261114-16 add
     frame[3] = 6;
     frame[4] = 1;
     frame[5] = operation;
-    frame[9] = operation == 0x10 ? 22 : 13;
-    frame[17] = 1;
+    frame[9] = operation == 0x10 ? 22 : (operation == 0x11 ? 26 : 13);
+    frame[17] = id;
     frame[21] = 101;
-    if (operation == 0x10) {
+    if (operation != 0x13) {
         frame[25] = 1;
         frame[29] = 250;
-        frame[31] = 5;
+        frame[31] = operation == 0x10 ? 5 : 17;
+        frame[35] = 200;
     }
     length = frame[9] + 12;
     crc = BF006_Modbus_CRC(frame, length - 2);
@@ -188,7 +189,7 @@ static void Board_Mode_Request(u8 operation, u8 phase) //20261114-16 add
     for (i = 0; i < 50; i++) {
         value = S4BUF;
         if ((i == 8 && value) || (i == 10 && value != 37) ||
-            (i == 31 && value != phase) || (i == 34 && value != (phase == 3 ? 6 : 1))) {
+            (i == 31 && value != phase) || (i == 34 && value != expected_state)) {
             Test_Done();
         }
         SET_TI4();
@@ -466,17 +467,35 @@ void main(void) //20261114-4 add
     Test_Result = 15;
     config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
     mutations = 0;
-    Board_Mode_Request(0x10, 2);
+    Board_Mode_Request(0x10, 1, 2, 1);
     if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
         Test_Done();
     }
     for (loop = 0; loop < 300; loop++) {
         Config_Background();
     }
-    Board_Mode_Request(0x13, 3);
+    Board_Mode_Request(0x13, 1, 3, 6);
     sys_init();
     Par_Init();
     if (config.Hand_Auto_timer_Flag != RUNMODE_AUTO) {
+        Test_Done();
+    }
+
+    Test_Result = 16;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    config.Auto_Mode = SENSORTYPE_WATER4_20MA;
+    mutations = 0;
+    Board_Mode_Request(0x11, 2, 2, 1);
+    if (config.Sensor_Rang != 150) {
+        Test_Done();
+    }
+    for (loop = 0; loop < 300; loop++) {
+        Config_Background();
+    }
+    Board_Mode_Request(0x13, 2, 3, 1);
+    sys_init();
+    Par_Init();
+    if (config.Sensor_Rang != 200 || sys.Sensor_Rang != 2000) {
         Test_Done();
     }
 

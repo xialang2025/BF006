@@ -397,7 +397,12 @@ static u8 Snapshot_Check_Setting(u8 field, u32 value, u32 *minimum, u32 *maximum
         break;
     case 25:
     case 26:
-        return 0x30; // 循环分钟上限等待实体核验
+        if (!SNAPSHOT_CYCLE_LIMIT) {
+            return 0x30;
+        }
+        *minimum = 1;
+        *maximum = SNAPSHOT_CYCLE_LIMIT;
+        break;
     }
     if (*minimum > *maximum || value < *minimum || value > *maximum) {
         return 0x23;
@@ -486,6 +491,58 @@ static u8 Snapshot_Check_Protection_Group(u8 *change) //20261114-10 add
     return 0;
 }
 
+typedef struct {
+    u8 request[26];
+    u8 operation;
+    u8 field;
+    u8 range_valid;
+    u16 minimum;
+    u16 maximum;
+    u8 evidence[57];
+    u32 accepted;
+    u32 observed;
+    u32 revision;
+    u8 phase;
+    u8 result;
+} Control_Record;
+
+static Control_Record xdata controls[2];
+
+static void Control_Capture(Control_Record xdata *entry, u32 revision, u32 now);
+static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now);
+static void Control_Use_Boot(u32 boot);
+static u8 Control_Render(Control_Record xdata *entry, u32 boot, u8 mode, u8 historical, u8 *length);
+
+#if BF006_CONFIG_STORE_ENABLED
+/******************************************************************************
+ * 函数名称       : Snapshot_Submit_Setting
+ * 功能描述       : 将已校验的远程单项写入交给公共配置事务。
+ * 输入参数       : field 字段号，value 原始参数值
+ * 返回值         : 保存状态
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Submit_Setting(u8 field, u16 value) //20261114-17 add
+{
+    static const struct {
+        u8 *address;
+        u8 width;
+    } code fields[] = {
+        {&config.Sensor_Mode, 1}, {&config.Sensor_Rang, 2}, {&config.Sensor_ON1, 2},
+        {&config.Sensor_STOP, 2}, {0, 0}, {&config.UVP_Value, 2}, {&config.OVP_Value, 2},
+        {&config.Set_OVERLOAD_Current1, 2}, {&config.Set_STANDBY_Current1, 2},
+        {&config.AUTO_Timing_Run, 2}, {&config.AUTO_Timing_Stop, 2},
+    };
+    u8 index;
+
+    if (!Config_Panel_Available()) {
+        return CONFIG_STORE_LOCKED;
+    }
+    index = field - 16;
+    Config_Panel_Encode(0, (u8)(fields[index].address - (u8 *)&config), value, fields[index].width);
+    return Config_Submit(fields[index].width);
+}
+#endif
+
 /******************************************************************************
  * 函数名称       : Snapshot_Setting_Reply
  * 功能描述       : 验证单写并返回实际值，存储尚未接入时拒绝改变配置。
@@ -510,6 +567,10 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
     u32 minimum;
     u32 maximum;
     u32 actual;
+#if BF006_CONFIG_STORE_ENABLED
+    Control_Record xdata *entry;
+    u8 submitted;
+#endif
 
     if (!Snapshot_Context(&boot, &revision, &now)) {
         return SNAPSHOT_CONTEXT_UNAVAILABLE;
@@ -529,6 +590,19 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
             flags |= 2;
         }
     }
+#if BF006_CONFIG_STORE_ENABLED
+    if (!group && mode <= 1 && Snapshot_Get32(18) == boot &&
+        (Snapshot_Get32(10) || Snapshot_Get32(14))) {
+        Control_Use_Boot(boot);
+        Control_Observe(&controls[0], revision, now);
+        Control_Observe(&controls[1], revision, now);
+        entry = &controls[0];
+        if (entry->phase && !memcmp(entry->request, &uart4_frame[10], 8) &&
+            entry->operation == 0x11 && !memcmp(entry->request, &uart4_frame[10], 26)) {
+            return Control_Render(entry, boot, mode, 1, length);
+        }
+    }
+#endif
     if (mode > 1) {
         result = 0x33;
     } else if (Snapshot_Get32(18) != boot) {
@@ -578,6 +652,47 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
             }
         }
     }
+#if BF006_CONFIG_STORE_ENABLED
+    if (!group && mode <= 1 && Snapshot_Get32(18) == boot &&
+        (Snapshot_Get32(10) || Snapshot_Get32(14))) {
+        entry = &controls[0];
+        if ((entry->phase && !memcmp(entry->request, &uart4_frame[10], 8)) ||
+            (controls[1].phase && !memcmp(controls[1].request, &uart4_frame[10], 8))) {
+            result = 0x2B;
+            phase = 1;
+        } else if (memcmp(&uart4_frame[10], control_high_water, 8) <= 0) {
+            result = 0x2C;
+            phase = 1;
+        } else {
+            memcpy(control_high_water, &uart4_frame[10], 8);
+            if (entry->phase == 2 || controls[1].phase == 2) {
+                result = 6;
+                phase = 1;
+            } else {
+                if (result == 0x30 && (flags & 12) == 12) {
+                    submitted = Snapshot_Submit_Setting(field, (u16)value);
+                    if (submitted == CONFIG_STORE_BUSY) {
+                        result = 0;
+                        phase = 2;
+                    } else {
+                        result = submitted == CONFIG_STORE_LOCKED ? 6 : 0x28;
+                    }
+                }
+                memcpy(entry->request, &uart4_frame[10], 26);
+                entry->operation = 0x11;
+                entry->accepted = now;
+                entry->result = result;
+                entry->phase = phase;
+                entry->field = field;
+                entry->range_valid = flags & 12;
+                entry->minimum = (u16)minimum;
+                entry->maximum = (u16)maximum;
+                Control_Capture(entry, revision, now);
+                return Control_Render(entry, boot, mode, 0, length);
+            }
+        }
+    }
+#endif
     if (group) {
         Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
     }
@@ -651,18 +766,6 @@ static u8 Snapshot_Field_Reply(u8 *length) //20261114-6 add
     return result;
 }
 
-typedef struct {
-    u8 request[22];
-    u8 evidence[57];
-    u32 accepted;
-    u32 observed;
-    u32 revision;
-    u8 phase;
-    u8 result;
-} Control_Record;
-
-static Control_Record xdata controls[2];
-
 /******************************************************************************
  * 函数名称       : Snapshot_Get32
  * 功能描述       : 从共享帧读取大端四字节字段。
@@ -715,12 +818,12 @@ static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) 
         return;
     }
 #if BF006_CONFIG_STORE_ENABLED
-    if (entry->request[21] >= 4) {
+    if (entry->operation != 0x10 || entry->request[21] >= 4) {
         storage = Config_Commit_Status();
         if (storage == CONFIG_STORE_BUSY) {
             return;
         }
-        if (storage == CONFIG_STORE_SAVED && config.Hand_Auto_timer_Flag == entry->request[21] - 4) {
+        if (storage == CONFIG_STORE_SAVED && (entry->operation != 0x10 || config.Hand_Auto_timer_Flag == entry->request[21] - 4)) {
             entry->phase = 3;
         } else {
             entry->phase = storage == CONFIG_STORE_UNCERTAIN ? 6 : 5;
@@ -741,6 +844,58 @@ static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) 
         entry->phase = 3;
     }
     Control_Capture(entry, revision, now);
+}
+
+/******************************************************************************
+ * 函数名称       : Control_Use_Boot
+ * 功能描述       : 切换到已确认的执行代次并清除旧记录。
+ * 输入参数       : boot 新代次
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static void Control_Use_Boot(u32 boot) //20261114-17 add
+{
+    if (boot != control_boot) {
+        memset(controls, 0, sizeof(controls));
+        memset(control_high_water, 0, sizeof(control_high_water));
+        control_boot = boot;
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : Control_Render
+ * 功能描述       : 从冻结的结果证据构造本次应答。
+ * 输入参数       : entry 结果槽，boot 执行代次，mode 应答方式，historical 历史标记，length 数据区长度
+ * 返回值         : 原结果码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Control_Render(Control_Record xdata *entry, u32 boot, u8 mode, u8 historical, u8 *length) //20261114-17 add
+{
+    u8 flags;
+    u32 actual;
+
+    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
+    memcpy(&uart4_frame[SNAPSHOT_CONTEXT_DATA + 4], entry->evidence, sizeof(entry->evidence));
+    memset(&uart4_frame[11], 0, SNAPSHOT_CONTEXT_SIZE);
+    memcpy(&uart4_frame[11], entry->request, 8);
+    Snapshot_Put32(19, boot);
+    Snapshot_Put32(23, entry->revision);
+    Snapshot_Put32(27, entry->observed);
+    flags = 1 | entry->range_valid | (mode == 1 ? 16 : 0) | (historical ? 32 : 0);
+    uart4_frame[31] = entry->phase;
+    uart4_frame[34] = uart4_frame[SNAPSHOT_CONTEXT_DATA + 17];
+    uart4_frame[35] = entry->field;
+    if (!Snapshot_Read_Field(entry->field, &actual)) {
+        flags |= 2;
+        Snapshot_Put32(36, actual);
+    }
+    uart4_frame[32] = flags;
+    if (entry->range_valid) {
+        Snapshot_Put32(40, entry->minimum);
+        Snapshot_Put32(44, entry->maximum);
+    }
+    *length = SNAPSHOT_CONTEXT_SIZE + (mode == 1 ? SNAPSHOT_DATA_SIZE : 0);
+    return entry->result;
 }
 
 /******************************************************************************
@@ -772,11 +927,7 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
     if (!Snapshot_Context(&boot, &revision, &now)) {
         return SNAPSHOT_CONTEXT_UNAVAILABLE;
     }
-    if (boot != control_boot) {
-        memset(controls, 0, sizeof(controls));
-        memset(control_high_water, 0, sizeof(control_high_water));
-        control_boot = boot;
-    }
+    Control_Use_Boot(boot);
     query = uart4_frame[5] == 0x13;
     mode = uart4_frame[query ? 22 : 30];
     action = query ? 0 : uart4_frame[31];
@@ -805,7 +956,7 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
             }
         }
         if (entry) {
-            if (!query && memcmp(entry->request, &uart4_frame[10], 22)) {
+            if (!query && (entry->operation != 0x10 || memcmp(entry->request, &uart4_frame[10], 22))) {
                 entry = 0;
                 result = 0x2B;
             } else {
@@ -827,7 +978,10 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
                 entry = 0;
                 result = 6;
             } else {
-                memcpy(entry->request, &uart4_frame[10], sizeof(entry->request));
+                memcpy(entry->request, &uart4_frame[10], 22);
+                entry->operation = 0x10;
+                entry->field = 0;
+                entry->range_valid = 0;
                 entry->phase = 1;
                 entry->accepted = now;
                 entry->result = 0;
@@ -880,14 +1034,10 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
         }
     }
 
-    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
     if (entry) {
-        memcpy(&uart4_frame[SNAPSHOT_CONTEXT_DATA + 4], entry->evidence, sizeof(entry->evidence));
-        result = entry->result;
-        phase = entry->phase;
-        now = entry->observed;
-        revision = entry->revision;
+        return Control_Render(entry, boot, mode, historical, length);
     }
+    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
     pump_state = ((u16)uart4_frame[SNAPSHOT_CONTEXT_DATA + 16] << 8) |
                  uart4_frame[SNAPSHOT_CONTEXT_DATA + 17];
     memmove(&uart4_frame[11], &uart4_frame[10], 8);
@@ -959,16 +1109,12 @@ void Snapshot4G_Process(void) //20261114-9 change
         }
 #if BF006_BOARD_CONTEXT || defined(BF006_CONTEXT_SIMULATION)
     } else if (uart4_frame[5] == 0x11 || uart4_frame[5] == 0x12) {
-#ifdef BF006_CONTEXT_SIMULATION
         if (uart4_frame[8] || (uart4_frame[5] == 0x11 && (length != 38 || uart4_frame[9] != 26)) ||
             (uart4_frame[5] == 0x12 && (length < 35 || length != uart4_frame[9] + 12))) {
             result = 3;
         } else {
             result = Snapshot_Setting_Reply(&data_length);
         }
-#else
-        result = 2;
-#endif
     } else if (uart4_frame[5] == 0x10 || uart4_frame[5] == 0x13) {
         if (uart4_frame[8] || (uart4_frame[5] == 0x10 && (length != 34 || uart4_frame[9] != 22)) ||
             (uart4_frame[5] == 0x13 && (length != 25 || uart4_frame[9] != 13))) {
