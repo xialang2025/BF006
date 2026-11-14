@@ -147,7 +147,7 @@ static void Read_Board_Context(void) //20261114-15 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state, u8 result) //20261114-22 change
+static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state, u8 result) //20261114-23 change
 {
     u8 frame[55];
     u8 i;
@@ -157,6 +157,7 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state,
     u32 boot;
     u32 revision;
     u32 now;
+    u32 deadline;
 
     if (!Boot_Context_Read(&boot, &revision, &now)) {
         Test_Done();
@@ -176,11 +177,19 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state,
         frame[23] = (u8)(revision >> 16);
         frame[24] = (u8)(revision >> 8);
         frame[25] = (u8)revision;
-        frame[28] = id >= 6 ? 7 : 0;
-        frame[29] = 250;
+        deadline = id >= 11 ? now + 1000UL : (id >= 6 ? 2042UL : 250UL);
+        if (id == 11) {
+            deadline = 1000UL;
+        }
+        frame[26] = (u8)(deadline >> 24);
+        frame[27] = (u8)(deadline >> 16);
+        frame[28] = (u8)(deadline >> 8);
+        frame[29] = (u8)deadline;
         frame[31] = operation == 0x10 ? 5 : 17;
         if (id == 8) {
             frame[31] = 2;
+        } else if (id == 9 || id == 10) {
+            frame[31] = 6;
         }
         frame[35] = 200;
         if (operation == 0x12) {
@@ -627,6 +636,43 @@ void main(void) //20261114-4 add
     if (config.Sensor_Mode != CTROLTYPE_PUMP || config.Sensor_ON1 != 20 || config.Sensor_STOP != 90) {
         Test_Done();
     }
+
+    Test_Result = 25;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    config.AUTO_Timing_Run = 2;
+    config.AUTO_Timing_Stop = 3;
+    sys.Auto_timer_count = 17;
+    mutations = 0;
+    Board_Mode_Request(0x10, 9, 2, 1, 0);
+    for (loop = 0; loop < 300; loop++) {
+        Snapshot4G_Before_Save();
+        Config_Background();
+        Snapshot4G_Background();
+    }
+    Board_Mode_Request(0x13, 9, 3, 10, 0);
+    if (sys.autoTimerFlag != 1 || sys.Auto_timer_count != 0) {
+        Test_Done();
+    }
+    mutations = 0;
+    sys.Auto_timer_count = 17;
+    Board_Mode_Request(0x10, 10, 4, 10, 0);
+    if (mutations || sys.Auto_timer_count != 17) {
+        Test_Done();
+    }
+    sys_init();
+    Par_Init();
+    if (config.Hand_Auto_timer_Flag != RUNMODE_TIMER || config.AUTO_Timing_Run != 2 || config.AUTO_Timing_Stop != 3) {
+        Test_Done();
+    }
+
+    Test_Result = 26;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    Board_Mode_Request(0x11, 11, 4, 1, 0);
+    for (boot = 0; boot < 600001UL; boot++) {
+        Boot_Context_Tick();
+    }
+    Board_Mode_Request(0x11, 11, 1, 1, 0x2C);
+    Board_Mode_Request(0x13, 11, 6, 1, 0x2C);
 
     Test_Result = 7;
     memset(pages, 0xFF, sizeof(pages));

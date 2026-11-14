@@ -46,7 +46,8 @@ def run_test(name, model, simulator, old_protocol=False):
             project = re.sub(r'<File>\s*<FileName>EEPROM\.c</FileName>.*?</File>', '', project, flags=re.S)
             project = project.replace('<Define></Define>',
                                       '<Define>BF006_CONFIG_SLOT_A=512,BF006_CONFIG_SLOT_B=1024,'
-                                      'BF006_BOOT_SLOT_A=1536,BF006_BOOT_SLOT_B=2048,BF006_TIMER0_VERIFIED</Define>', 1)
+                                      'BF006_BOOT_SLOT_A=1536,BF006_BOOT_SLOT_B=2048,BF006_TIMER0_VERIFIED,'
+                                      'BF006_CYCLE_LIMIT=100</Define>', 1)
         project = re.sub(r'<File>\s*<FileName>RS485\.c</FileName>.*?</File>', '', project, flags=re.S)
         if name == 'uart4_context_test':
             project = project.replace('<Define></Define>', '<Define>BF006_CONTEXT_SIMULATION</Define>', 1)

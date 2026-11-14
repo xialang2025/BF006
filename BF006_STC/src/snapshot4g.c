@@ -869,7 +869,7 @@ static void Control_Capture(Control_Record xdata *entry, u32 revision, u32 now) 
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) //20261114-7 add
+static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) //20261114-23 change
 {
     u8 target;
 #if BF006_CONFIG_STORE_ENABLED
@@ -877,13 +877,16 @@ static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) 
 #endif
 
     if (entry->phase != 2) {
+        if (entry->phase && now >= entry->observed && now - entry->observed >= 600000UL) {
+            entry->phase = 0; // 到期仅释放结果槽，保留编号高水位。
+        }
         return;
     }
 #if BF006_CONFIG_STORE_ENABLED
     if (entry->operation != 0x10 || entry->request[21] >= 4) {
         storage = Config_Commit_Status();
         if (storage == CONFIG_STORE_BUSY) {
-        if (now >= entry->accepted && now - entry->accepted >= 5000UL) {
+            if (now >= entry->accepted && now - entry->accepted >= 5000UL) {
                 Config_Abort_Commit();
                 entry->phase = 6;
                 entry->result = 0x34;
@@ -1015,10 +1018,6 @@ static u8 Control_Reply(u8 *length) //20261114-22 change
     } else {
         for (i = 0; i < 2; i++) {
             Control_Observe(&controls[i], revision, now);
-            if (controls[i].phase && controls[i].phase != 2 &&
-                now >= controls[i].observed && now - controls[i].observed >= 600000UL) {
-                controls[i].phase = 0;
-            }
             if (controls[i].phase && !memcmp(controls[i].request, &uart4_frame[10], 8)) {
                 entry = &controls[i];
             }
