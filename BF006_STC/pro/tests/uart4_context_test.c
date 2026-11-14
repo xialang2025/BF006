@@ -3,9 +3,10 @@
 #include "Modbus_New.h"
 
 volatile u8 xdata Test_Result _at_ 0x0BFE;
-static u8 xdata frame[14];
+static u8 xdata frame[34];
 static u8 xdata reply[127];
 static u8 xdata baseline[77];
+static u32 simulated_time = 60000;
 
 extern void UART4_int(void);
 
@@ -33,7 +34,7 @@ u8 Snapshot_Test_Context(u32 *boot, u32 *revision, u32 *uptime)
 {
     *boot = 1;
     *revision = 7;
-    *uptime = 60000;
+    *uptime = simulated_time;
     return 1;
 }
 
@@ -184,6 +185,79 @@ void main(void) //20261114-6 add
     frame[9] = 1;
     Exchange(13, 13);
     if (reply[8] != 3) {
+        Test_Done();
+    }
+
+    Test_Result = 31;
+    sys.Fault_Error = 0;
+    frame[5] = 0x10;
+    frame[8] = 0;
+    frame[9] = 22;
+    memset(&frame[10], 0, 22);
+    frame[17] = 1;
+    frame[21] = 1;
+    frame[25] = 7;
+    frame[24] = 0;
+    frame[28] = 0xFD;
+    frame[29] = 0xE8;
+    frame[31] = 1;
+    Exchange(34, 50);
+    if (reply[8] || reply[31] != 2 || !sys.Pump_A_ON || sys.Pump_A_state) {
+        Test_Done();
+    }
+    Test_Result = 32;
+    sys.Pump_A_state = 1;
+    simulated_time = 60020;
+    Exchange(34, 50);
+    if (reply[8] || reply[31] != 3 || !(reply[32] & 32) || reply[34] != 0x11) {
+        Test_Done();
+    }
+    frame[30] = 1;
+    Test_Result = 33;
+    Exchange(34, 127);
+    if (reply[8] != 0x2B || reply[31] != 1) {
+        Test_Done();
+    }
+    frame[5] = 0x13;
+    Test_Result = 34;
+    frame[9] = 13;
+    frame[22] = 1;
+    sys.Pump_A_state = 0;
+    Exchange(25, 127);
+    if (reply[8] || reply[31] != 3 || !(reply[32] & 32) || reply[34] != 0x11 ||
+        reply[65] != 0x11) {
+        Test_Done();
+    }
+
+    Test_Result = 35;
+    frame[5] = 0x10;
+    frame[9] = 22;
+    frame[17] = 2;
+    frame[22] = 0;
+    frame[23] = 0;
+    frame[24] = 0;
+    frame[25] = 7;
+    frame[30] = 0;
+    frame[31] = 1;
+    Exchange(34, 50);
+    if (reply[8] || reply[31] != 2 || !sys.Pump_A_ON) {
+        Test_Done();
+    }
+    frame[17] = 3;
+    Test_Result = 36;
+    frame[25] = 6; // 停泵不受普通配置版本冲突阻挡
+    frame[31] = 2;
+    Exchange(34, 50);
+    if (reply[8] || reply[31] != 4 || sys.Pump_A_ON) {
+        Test_Done();
+    }
+    frame[17] = 2;
+    Test_Result = 37;
+    frame[5] = 0x13;
+    frame[9] = 13;
+    frame[22] = 0;
+    Exchange(25, 50);
+    if (reply[8] != 0x31 || reply[31] != 5 || !(reply[32] & 32)) {
         Test_Done();
     }
     Test_Result = 0;

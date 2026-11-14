@@ -269,6 +269,217 @@ static u8 Snapshot_Field_Reply(u8 *length) //20261114-6 add
     *length = SNAPSHOT_CONTEXT_SIZE + (mode == 1 ? SNAPSHOT_DATA_SIZE : 0);
     return result;
 }
+
+typedef struct {
+    u8 request[22];
+    u8 evidence[57];
+    u32 accepted;
+    u32 observed;
+    u32 revision;
+    u8 phase;
+    u8 result;
+} Control_Record;
+
+static Control_Record xdata controls[2];
+static u8 xdata control_high_water[8];
+static u32 control_boot;
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Get32
+ * 功能描述       : 从共享帧读取大端四字节字段。
+ * 输入参数       : offset 字段偏移
+ * 返回值         : 字段值
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u32 Snapshot_Get32(u8 offset) //20261114-7 add
+{
+    u8 i;
+    u32 value;
+
+    value = 0;
+    for (i = 0; i < 4; i++) {
+        value = (value << 8) | uart4_frame[offset + i];
+    }
+    return value;
+}
+
+/******************************************************************************
+ * 函数名称       : Control_Capture
+ * 功能描述       : 保存本次操作确认时的有效位和业务字段。
+ * 输入参数       : entry 结果槽，revision 配置版本，now 采样时刻
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static void Control_Capture(Control_Record xdata *entry, u32 revision, u32 now) //20261114-7 add
+{
+    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
+    memcpy(entry->evidence, &uart4_frame[SNAPSHOT_CONTEXT_DATA + 4], sizeof(entry->evidence));
+    entry->observed = now;
+    entry->revision = revision;
+}
+
+/******************************************************************************
+ * 函数名称       : Control_Observe
+ * 功能描述       : 从实际运行状态收束已经触发的启停，冻结已完成证据。
+ * 输入参数       : entry 结果槽，revision 配置版本，now 当前时刻
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) //20261114-7 add
+{
+    u8 target;
+
+    if (entry->phase != 2) {
+        return;
+    }
+    target = entry->request[21] == 1;
+    if (now < entry->accepted || now - entry->accepted >= 5000UL) {
+        if (target && !sys.Pump_A_state) {
+            sys.Pump_A_ON = 0;
+        }
+        entry->phase = 6;
+        entry->result = 0x34;
+    } else if ((sys.Pump_A_state != 0) == target) {
+        entry->phase = 3;
+    }
+    Control_Capture(entry, revision, now);
+}
+
+/******************************************************************************
+ * 函数名称       : Control_Reply
+ * 功能描述       : 按原编号保存或读取结果，仿真使用注入的执行上下文。
+ * 输入参数       : length 返回的数据区长度
+ * 返回值         : 协议结果码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Control_Reply(u8 *length) //20261114-7 add
+{
+    Control_Record xdata *entry;
+    u8 i;
+    u8 action;
+    u8 mode;
+    u8 phase;
+    u8 result;
+    u8 historical;
+    u8 query;
+    u16 pump_state;
+    u32 boot;
+    u32 revision;
+    u32 now;
+    u32 deadline;
+
+    if (!Snapshot_Test_Context(&boot, &revision, &now) || !boot || !revision) {
+        return SNAPSHOT_CONTEXT_UNAVAILABLE;
+    }
+    if (boot != control_boot) {
+        memset(controls, 0, sizeof(controls));
+        memset(control_high_water, 0, sizeof(control_high_water));
+        control_boot = boot;
+    }
+    query = uart4_frame[5] == 0x13;
+    mode = uart4_frame[query ? 22 : 30];
+    action = query ? 0 : uart4_frame[31];
+    deadline = query ? 0 : Snapshot_Get32(26);
+    phase = query ? 6 : 1;
+    result = 0;
+    historical = 0;
+    entry = 0;
+    if (mode > 1) {
+        result = 0x33;
+    } else if (Snapshot_Get32(18) != boot) {
+        result = 0x27;
+    } else if (!query && (action < 1 || action > 6)) {
+        result = 0x2A;
+    } else if (!Snapshot_Get32(10) && !Snapshot_Get32(14)) {
+        result = 0x2A;
+    } else {
+        for (i = 0; i < 2; i++) {
+            Control_Observe(&controls[i], revision, now);
+            if (controls[i].phase && controls[i].phase != 2 &&
+                now >= controls[i].observed && now - controls[i].observed >= 600000UL) {
+                controls[i].phase = 0;
+            }
+            if (controls[i].phase && !memcmp(controls[i].request, &uart4_frame[10], 8)) {
+                entry = &controls[i];
+            }
+        }
+        if (entry) {
+            if (!query && memcmp(entry->request, &uart4_frame[10], 22)) {
+                entry = 0;
+                result = 0x2B;
+            } else {
+                historical = 1;
+            }
+        } else if (query || memcmp(&uart4_frame[10], control_high_water, 8) <= 0) {
+            result = 0x2C;
+        } else if (deadline <= now || deadline - now > 10000UL) {
+            result = 0x2E;
+        } else if (action != 2 && Snapshot_Get32(22) != revision) {
+            result = 0x26;
+        } else {
+            memcpy(control_high_water, &uart4_frame[10], 8);
+            entry = &controls[action == 2];
+            if (entry->phase == 2) {
+                entry = 0;
+                result = 6;
+            } else {
+                memcpy(entry->request, &uart4_frame[10], sizeof(entry->request));
+                entry->phase = 1;
+                entry->accepted = now;
+                entry->result = 0;
+                if (action <= 2) {
+                    if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
+                        entry->result = 0x20;
+                    } else if (action == 1 && (sys.Fault_A_Flag || sys.Fault_Error || config.Lock1)) {
+                        entry->result = 0x22;
+                    } else {
+                        if (action == 2 && controls[0].phase == 2 && controls[0].request[21] == 1) {
+                            controls[0].phase = 5;
+                            controls[0].result = 0x31;
+                            Control_Capture(&controls[0], revision, now);
+                        }
+                        sys.Pump_A_ON = action == 1;
+                        entry->phase = ((sys.Pump_A_state != 0) == (action == 1)) ? 4 : 2;
+                    }
+                } else if (action == 3) {
+                    if (!sys.Fault_Error && !sys.Fault_A_Flag) {
+                        entry->phase = 4;
+                    } else {
+                        clear_A_Fault();
+                        entry->result = (sys.Fault_Error || sys.Fault_A_Flag) ? 0x22 : 0;
+                        entry->phase = entry->result ? 5 : 3;
+                    }
+                } else if (config.Hand_Auto_timer_Flag == action - 4) {
+                    entry->phase = 4;
+                } else {
+                    entry->result = 0x30; // 模式切换等待统一保存和循环能力验证
+                }
+                Control_Capture(entry, revision, now);
+            }
+        }
+    }
+
+    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
+    if (entry) {
+        memcpy(&uart4_frame[SNAPSHOT_CONTEXT_DATA + 4], entry->evidence, sizeof(entry->evidence));
+        result = entry->result;
+        phase = entry->phase;
+        now = entry->observed;
+        revision = entry->revision;
+    }
+    pump_state = ((u16)uart4_frame[SNAPSHOT_CONTEXT_DATA + 16] << 8) |
+                 uart4_frame[SNAPSHOT_CONTEXT_DATA + 17];
+    memmove(&uart4_frame[11], &uart4_frame[10], 8);
+    memset(&uart4_frame[19], 0, 29);
+    Snapshot_Put32(19, boot);
+    Snapshot_Put32(23, revision);
+    Snapshot_Put32(27, now);
+    uart4_frame[31] = phase;
+    uart4_frame[32] = 1 | (mode == 1 ? 16 : 0) | (historical ? 32 : 0);
+    Snapshot_Put16(33, pump_state);
+    *length = SNAPSHOT_CONTEXT_SIZE + (mode == 1 ? SNAPSHOT_DATA_SIZE : 0);
+    return result;
+}
 #endif
 
 /******************************************************************************
@@ -278,7 +489,7 @@ static u8 Snapshot_Field_Reply(u8 *length) //20261114-6 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-void Snapshot4G_Process(void) //20261114-6 change
+void Snapshot4G_Process(void) //20261114-7 change
 {
     u8 length;
     u8 result;
@@ -321,6 +532,15 @@ void Snapshot4G_Process(void) //20261114-6 change
             result = SNAPSHOT_CONTEXT_UNAVAILABLE;
 #endif
         }
+#ifdef BF006_CONTEXT_SIMULATION
+    } else if (uart4_frame[5] == 0x10 || uart4_frame[5] == 0x13) {
+        if (uart4_frame[8] || (uart4_frame[5] == 0x10 && (length != 34 || uart4_frame[9] != 22)) ||
+            (uart4_frame[5] == 0x13 && (length != 25 || uart4_frame[9] != 13))) {
+            result = 3;
+        } else {
+            result = Control_Reply(&data_length);
+        }
+#endif
     } else if (uart4_frame[5] != SNAPSHOT_OPERATION) {
         if (length != SNAPSHOT_REQUEST_SIZE &&
             (length < 12 || uart4_frame[8] != 0 || length != uart4_frame[9] + 12)) {
