@@ -1,4 +1,5 @@
 #include "uart4.h"
+#include "boot_identity.h" //20261114-21 add
 //20261113-0 del 封存旧串口状态清零所用头文件：#include "string.h"
 
 #if (Model_OUT == Model_1C1) && !defined(UART4_ECHO_TEST) //20261114-3 change 回显工程仅使用串口初始化
@@ -158,6 +159,31 @@ u8 UART4_Claim(void) //20261114-2 add
     uart4_state = UART4_OWNED; // 接收与计时中断均不改动就绪状态和帧内容
     return uart4_count;
 }
+
+#if BF006_BOARD_CONTEXT || defined(BF006_CONTEXT_SIMULATION)
+/******************************************************************************
+ * 函数名称       : UART4_Claim_Idle
+ * 功能描述       : 串口空闲时暂借共享帧保存操作证据。
+ * 输入参数       : None
+ * 返回值         : 取得所有权返回一
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u8 UART4_Claim_Idle(void) //20261114-21 add
+{
+    bit interrupt_enabled;
+    u8 claimed;
+
+    interrupt_enabled = EA;
+    EA = 0;
+    claimed = uart4_state == UART4_RX && uart4_count == 0 && !RI4;
+    if (claimed) {
+        uart4_state = UART4_OWNED;
+    }
+    EA = interrupt_enabled;
+    return claimed;
+}
+
+#endif
 
 /******************************************************************************
  * 函数名称       : UART4_Finish

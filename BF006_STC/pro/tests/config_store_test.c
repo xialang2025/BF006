@@ -168,6 +168,7 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state,
     frame[21] = 101;
     if (operation != 0x13) {
         frame[25] = 1;
+        frame[28] = id == 6 ? 7 : 0;
         frame[29] = 250;
         frame[31] = operation == 0x10 ? 5 : 17;
         frame[35] = 200;
@@ -234,7 +235,8 @@ void EEPROM_read_n(u16 address, u8 *destination, u16 length)
         *destination = address >= BF006_BOOT_SLOT_A && (address & 511) >= PAGE_SIZE ? 0xFF :
                        pages[IAP_Test_Address(address)];
         if (corrupt_commit_read && (address == SECOND_PAGE + COMMIT_OFFSET ||
-            address == BF006_CONFIG_SLOT_B + COMMIT_OFFSET) &&
+            (mutations >= 129 && (address == BF006_CONFIG_SLOT_A + COMMIT_OFFSET ||
+             address == BF006_CONFIG_SLOT_B + COMMIT_OFFSET))) &&
             *destination == 0xA5) {
             *destination = 0xFF;
             corrupt_commit_read = 0;
@@ -495,6 +497,7 @@ void main(void) //20261114-4 add
     if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
         Test_Done();
     }
+
     for (loop = 0; loop < 300; loop++) {
         Config_Background();
     }
@@ -572,6 +575,21 @@ void main(void) //20261114-4 add
     if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
         Test_Done();
     }
+
+    Test_Result = 20;
+    mutations = 0;
+    corrupt_commit_read = 1;
+    Board_Mode_Request(0x10, 6, 2, 1, 0);
+    for (loop = 0; loop < 300; loop++) {
+        Boot_Context_Tick();
+        Snapshot4G_Before_Save();
+        Config_Background();
+        Snapshot4G_Background();
+    }
+    if (config.Hand_Auto_timer_Flag != RUNMODE_AUTO) {
+        Test_Done();
+    }
+    Board_Mode_Request(0x13, 6, 6, 1, 0x28);
 
     Test_Result = 7;
     memset(pages, 0xFF, sizeof(pages));

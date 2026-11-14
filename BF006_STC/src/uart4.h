@@ -12,6 +12,7 @@ void uart_init(void); //20261113-0 change 保留串口四硬件初始化接口
 extern u8 xdata uart4_frame[UART4_FRAME_CAPACITY]; //20261114-2 add 收发共享帧
 void UART4_Tick(void);
 u8 UART4_Claim(void);
+u8 UART4_Claim_Idle(void);
 void UART4_Finish(u8 length);
 #endif
 

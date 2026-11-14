@@ -397,12 +397,13 @@ static u8 Snapshot_Check_Setting(u8 field, u32 value, u32 *minimum, u32 *maximum
         break;
     case 25:
     case 26:
-        if (!SNAPSHOT_CYCLE_LIMIT) {
-            return 0x30;
-        }
+#if SNAPSHOT_CYCLE_LIMIT
         *minimum = 1;
         *maximum = SNAPSHOT_CYCLE_LIMIT;
         break;
+#else
+        return 0x30;
+#endif
     }
     if (*minimum > *maximum || value < *minimum || value > *maximum) {
         return 0x23;
@@ -612,6 +613,7 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
 #if BF006_CONFIG_STORE_ENABLED
     Control_Record xdata *entry;
     u8 submitted;
+    u8 request_tail[5];
 #endif
 
     if (!Snapshot_Context(&boot, &revision, &now)) {
@@ -639,8 +641,14 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
     if (mode <= 1 && Snapshot_Get32(18) == boot &&
         (Snapshot_Get32(10) || Snapshot_Get32(14))) {
         Control_Use_Boot(boot);
+        if (request_length == 43) {
+            memcpy(request_tail, &uart4_frame[48], sizeof(request_tail));
+        }
         Control_Observe(&controls[0], revision, now);
         Control_Observe(&controls[1], revision, now);
+        if (request_length == 43) {
+            memcpy(&uart4_frame[48], request_tail, sizeof(request_tail));
+        }
         entry = &controls[0];
         if (entry->phase && !memcmp(entry->request, &uart4_frame[10], 8) &&
             entry->operation == operation && entry->request_length == request_length &&
@@ -875,6 +883,12 @@ static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) 
     if (entry->operation != 0x10 || entry->request[21] >= 4) {
         storage = Config_Commit_Status();
         if (storage == CONFIG_STORE_BUSY) {
+        if (now >= entry->accepted && now - entry->accepted >= 5000UL) {
+                Config_Abort_Commit();
+                entry->phase = 6;
+                entry->result = 0x34;
+                Control_Capture(entry, revision, now);
+            }
             return;
         }
         if (storage == CONFIG_STORE_SAVED && (entry->operation != 0x10 || config.Hand_Auto_timer_Flag == entry->request[21] - 4)) {
@@ -1120,9 +1134,9 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
+#if BF006_BOARD_CONTEXT
 void Snapshot4G_Before_Save(void) //20261114-20 add
 {
-#if BF006_BOARD_CONTEXT
     Control_Record xdata *entry;
     u32 boot;
     u32 revision;
@@ -1146,8 +1160,46 @@ void Snapshot4G_Before_Save(void) //20261114-20 add
         (sys.Setting_Flag == 2 && sys.Setting_Index < 21)) {
         Config_Abort_Commit();
     }
-#endif
 }
+#endif
+
+/******************************************************************************
+ * 函数名称       : Snapshot4G_Background
+ * 功能描述       : 主循环独立收束操作并在旧事务结束后更新回绕代次。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+#if BF006_BOARD_CONTEXT || defined(BF006_CONTEXT_SIMULATION)
+void Snapshot4G_Background(void) //20261114-21 add
+{
+    u32 boot;
+    u32 revision;
+    u32 now;
+
+#if BF006_BOARD_CONTEXT
+    if (Boot_Context_Wrapped()) {
+        if (controls[0].phase == 2 && controls[0].operation == 0x10 &&
+            controls[0].request[21] == 1 && !sys.Pump_A_state) {
+            sys.Pump_A_ON = 0;
+        }
+        Config_Abort_Commit();
+        if (!Config_Storage_Active()) {
+            Boot_Context_Renew();
+        }
+        return;
+    }
+#endif
+    if ((controls[0].phase != 2 && controls[1].phase != 2) ||
+        !Snapshot_Context(&boot, &revision, &now) || !UART4_Claim_Idle()) {
+        return;
+    }
+    Control_Use_Boot(boot);
+    Control_Observe(&controls[0], revision, now);
+    Control_Observe(&controls[1], revision, now);
+    UART4_Finish(0);
+}
+#endif
 
 /******************************************************************************
  * 函数名称       : Snapshot4G_Process

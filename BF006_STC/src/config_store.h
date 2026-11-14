@@ -44,6 +44,7 @@ u8 Config_Commit_Status(void);
 u8 Config_Stage_Mode(u8 mode);
 void Config_Abort_Commit(void);
 u8 Config_At_Marker(void);
+u8 Config_Storage_Active(void);
 void Config_Observe_Changes(void);
 #endif
 

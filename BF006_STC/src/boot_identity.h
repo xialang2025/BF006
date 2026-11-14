@@ -8,6 +8,8 @@
 #define BF006_BOARD_CONTEXT 1
 void Boot_Context_Init(void);
 void Boot_Context_Tick(void);
+void Boot_Context_Renew(void);
+u8 Boot_Context_Wrapped(void);
 u8 Boot_Context_Read(u32 *boot, u32 *revision, u32 *uptime);
 #else
 #define BF006_BOARD_CONTEXT 0

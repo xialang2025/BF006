@@ -400,6 +400,10 @@ void main(void) //20261114-6 add
 
     Test_Result = 43;
     simulated_time = 65020;
+    Snapshot4G_Background();
+    if (sys.Pump_A_ON) {
+        Test_Done();
+    }
     Exchange(34, 50);
     if (reply[8] != 0x34 || reply[31] != 6 || sys.Pump_A_ON) {
         Test_Done();
