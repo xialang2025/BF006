@@ -430,6 +430,22 @@ void main(void) //20261114-2 add
     Read_Reply(0);
     Send_Frame(request, sizeof(request));
     Read_Reply(90);
+
+    Test_Result = 25;
+    for (i = 2; i <= 3; i++) {
+        memcpy(frame, request, 8);
+        frame[5] = i;
+        frame[8] = 0;
+        frame[9] = 0;
+        crc = Test_CRC(frame, 10);
+        frame[10] = (u8)crc;
+        frame[11] = crc >> 8;
+        Send_Frame(frame, 12);
+        Read_Reply(13);
+        if (reply[5] != i || reply[8] != 0x32 || reply[9] || reply[10]) {
+            Test_Done();
+        }
+    }
 #else
     Test_Result = 30;
     for (i = 0; i < sizeof(request); i++) {

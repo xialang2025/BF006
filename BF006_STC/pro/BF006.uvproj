@@ -447,6 +447,11 @@
               <FilePath>..\src\config_store.c</FilePath>
             </File>
             <File>
+              <FileName>boot_identity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\boot_identity.c</FilePath>
+            </File>
+            <File>
               <FileName>key.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\key.c</FilePath>

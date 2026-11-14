@@ -12,6 +12,7 @@
 #define SNAPSHOT_DATA_SIZE 77
 #define SNAPSHOT_REQUEST_SIZE 10
 #define SNAPSHOT_INVALID 0xFFFF
+#define SNAPSHOT_CONTEXT_UNAVAILABLE 0x32 //20261114-5 add 执行代次或时基尚未验证
 
 /******************************************************************************
  * 函数名称       : Snapshot_Put16
@@ -180,7 +181,7 @@ static void Snapshot_Write_Data(void) //20261114-2 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-void Snapshot4G_Process(void) //20261114-2 add
+void Snapshot4G_Process(void) //20261114-5 change
 {
     u8 length;
     u8 result;
@@ -207,6 +208,12 @@ void Snapshot4G_Process(void) //20261114-2 add
     data_length = 0;
     if (uart4_frame[4] != SNAPSHOT_FORMAT) {
         result = 1;
+    } else if (uart4_frame[5] == 2 || uart4_frame[5] == 3) {
+        if (length != 12 || uart4_frame[8] || uart4_frame[9]) {
+            result = 3;
+        } else {
+            result = SNAPSHOT_CONTEXT_UNAVAILABLE;
+        }
     } else if (uart4_frame[5] != SNAPSHOT_OPERATION) {
         if (length != SNAPSHOT_REQUEST_SIZE &&
             (length < 12 || uart4_frame[8] != 0 || length != uart4_frame[9] + 12)) {

@@ -1,5 +1,6 @@
 #include "config_store.h"
 #include "EEPROM.h"
+#include "boot_identity.h"
 
 #define PAGE_SIZE 128
 #define FIRST_PAGE 0
@@ -8,6 +9,9 @@
 #define COMMIT_OFFSET 127
 #define LEGACY_PAGE_SIZE 512
 #define SIMULATED_IAP_SIZE (3 * LEGACY_PAGE_SIZE)
+#define IDENTITY_PAGE_A 1280
+#define IDENTITY_PAGE_B 1312
+#define IDENTITY_SECTOR_SIZE 32
 
 volatile u8 xdata Test_Result _at_ 0x0BFE;
 extern void interEidt(void);
@@ -70,7 +74,11 @@ void EEPROM_write_n(u16 address, u8 *source, u16 length)
 void EEPROM_SectorErase(u16 address)
 {
     if (mutations++ < cut_at) {
-        memset(&pages[address], 0xFF, address >= LEGACY_PAGE_SIZE ? LEGACY_PAGE_SIZE : PAGE_SIZE);
+        if (address >= IDENTITY_PAGE_A) {
+            memset(&pages[address], 0xFF, IDENTITY_SECTOR_SIZE);
+        } else {
+            memset(&pages[address], 0xFF, address >= LEGACY_PAGE_SIZE ? LEGACY_PAGE_SIZE : PAGE_SIZE);
+        }
     }
 }
 
@@ -123,6 +131,7 @@ void main(void) //20261114-4 add
     u8 interruption;
     u8 step;
     u16 loop;
+    u32 boot;
 
     Test_Result = 1;
     cut_at = 0xFF;
@@ -263,6 +272,49 @@ void main(void) //20261114-4 add
     sys.Pump_A_ON = 1;
     Sys_Control();
     if (config_trusted || sys.Pump_A_ON || sys.Pump_A_state) {
+        Test_Done();
+    }
+
+    Test_Result = 10;
+    mutations = 0;
+    cut_at = 0xFF;
+    if (Boot_Identity_Advance(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE) != 0 ||
+        mutations || !Boot_Identity_Provision(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE, 100)) {
+        Test_Done();
+    }
+    for (boot = 101; boot < 108; boot++) {
+        if (Boot_Identity_Advance(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE) != boot) {
+            Test_Done();
+        }
+    }
+    if (Boot_Identity_Provision(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE, 109)) {
+        Test_Done();
+    }
+
+    Test_Result = 11;
+    memset(&pages[IDENTITY_PAGE_A], 0xFF, 2 * IDENTITY_SECTOR_SIZE);
+    if (!Boot_Identity_Provision(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE, 100)) {
+        Test_Done();
+    }
+    cut_at = 4;
+    mutations = 0;
+    if (Boot_Identity_Advance(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE) != 0) {
+        Test_Done();
+    }
+    cut_at = 0xFF;
+    if (Boot_Identity_Advance(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE) != 101) {
+        Test_Done();
+    }
+    pages[IDENTITY_PAGE_A + 16] ^= 1;
+    if (Boot_Identity_Advance(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE) != 0) {
+        Test_Done();
+    }
+
+    Test_Result = 12;
+    memset(&pages[IDENTITY_PAGE_A], 0xFF, 2 * IDENTITY_SECTOR_SIZE);
+    if (!Boot_Identity_Provision(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE, 0xFFFFFFFEUL) ||
+        Boot_Identity_Advance(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE) != 0xFFFFFFFFUL ||
+        Boot_Identity_Advance(IDENTITY_PAGE_A, IDENTITY_PAGE_B, IDENTITY_SECTOR_SIZE) != 0) {
         Test_Done();
     }
     Test_Result = 0;
