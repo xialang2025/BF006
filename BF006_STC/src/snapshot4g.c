@@ -976,7 +976,7 @@ static u8 Control_Render(Control_Record xdata *entry, u32 boot, u8 mode, u8 hist
  * 返回值         : 协议结果码
  * 日期            : 2026.11.14
  ******************************************************************************/
-static u8 Control_Reply(u8 *length) //20261114-22 change
+static u8 Control_Reply(u8 *length) //20261114-24 change
 {
     Control_Record xdata *entry;
     u8 i;
@@ -1031,11 +1031,6 @@ static u8 Control_Reply(u8 *length) //20261114-22 change
             }
         } else if (query || memcmp(&uart4_frame[10], control_high_water, 8) <= 0) {
             result = 0x2C;
-        } else if (deadline <= now || deadline - now > 10000UL ||
-                   (action != 2 && now > 0xFFFFFFFFUL - 5000UL)) {
-            result = 0x2E;
-        } else if (action != 2 && Snapshot_Get32(22) != revision) {
-            result = 0x26;
         } else {
             memcpy(control_high_water, &uart4_frame[10], 8);
             entry = &controls[action == 2];
@@ -1053,7 +1048,13 @@ static u8 Control_Reply(u8 *length) //20261114-22 change
                 entry->phase = 1;
                 entry->accepted = now;
                 entry->result = 0;
-                if (action <= 2) {
+                // 先封存结构合法的编号，拒绝的旧意图不能改截止后再执行。
+                if (deadline <= now || deadline - now > 10000UL ||
+                    (action != 2 && now > 0xFFFFFFFFUL - 5000UL)) {
+                    entry->result = 0x2E;
+                } else if (action != 2 && Snapshot_Get32(22) != revision) {
+                    entry->result = 0x26;
+                } else if (action <= 2) {
                     if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
                         entry->result = 0x20;
 #ifndef BF006_CONTEXT_SIMULATION

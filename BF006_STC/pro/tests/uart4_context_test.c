@@ -425,9 +425,22 @@ void main(void) //20261114-6 add
     if (reply[8] != 0x27 || reply[22] != 2) {
         Test_Done();
     }
+    Test_Result = 46;
+    frame[21] = 2;
+    frame[29] = 0;
+    frame[28] = 0;
+    Exchange(34, 50);
+    if (reply[8] != 0x2E || reply[31] != 1) {
+        Test_Done();
+    }
+    frame[29] = 100;
+    Exchange(34, 50);
+    if (reply[8] != 0x2B || sys.Pump_A_ON) {
+        Test_Done();
+    }
     Test_Result = 45;
     simulated_time = 0xFFFFF000UL;
-    frame[21] = 2;
+    frame[17]++;
     frame[26] = 0xFF;
     frame[27] = 0xFF;
     frame[28] = 0xFF;
