@@ -1,7 +1,7 @@
 #include "uart4.h"
 //20261113-0 del 封存旧串口状态清零所用头文件：#include "string.h"
 
-#if (Model_OUT == Model_1C1)
+#if (Model_OUT == Model_1C1) && !defined(UART4_ECHO_TEST) //20261114-3 change 回显工程仅使用串口初始化
 #define UART4_IDLE_TICKS 11 // 跨越十个完整毫秒后判定静默
 #define UART4_RX 0
 #define UART4_READY 1
@@ -35,7 +35,7 @@ u8 	xdata RX4_Buffer[COM_RX4_Lenth];	//接收缓冲
  ******************************************************************************/
 void uart_init(void) //20261113-0 change
 {
-#if (Model_OUT == Model_1C1)
+#if (Model_OUT == Model_1C1) && !defined(UART4_ECHO_TEST)
     uart4_state = UART4_RX; //20261114-2 add 仅在开放串口中断前初始化所有权
     uart4_count = 0;
     uart4_idle = 0;
@@ -121,7 +121,7 @@ void UART4_RX_CNT(void)
 }
 #endif
 
-#if (Model_OUT == Model_1C1)
+#if (Model_OUT == Model_1C1) && !defined(UART4_ECHO_TEST)
 /******************************************************************************
  * 函数名称       : UART4_Tick
  * 功能描述       : 在一毫秒中断中结束收帧或解除丢弃状态。

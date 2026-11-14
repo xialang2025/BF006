@@ -72,7 +72,7 @@
 
 // device type selection
 //=================================================================
-#define Model_Device Model_1PH_220_1C2_LCD
+#define Model_Device Model_1PH_220_1C1_LCD //20261114-3 change 默认使用单相二百二十伏一控一机型
 //================================================================
 
 #if(Model_Device==Model_3PH_380_1C2_LCD)

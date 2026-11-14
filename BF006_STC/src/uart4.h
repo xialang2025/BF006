@@ -5,7 +5,7 @@
 
 void uart_init(void); //20261113-0 change 保留串口四硬件初始化接口
 
-#if (Model_OUT == Model_1C1)
+#if (Model_OUT == Model_1C1) && !defined(UART4_ECHO_TEST) //20261114-3 change 独立回显不接入快照收发
 #define UART4_FRAME_CAPACITY 127
 #define UART4_REQUEST_LIMIT 55
 
