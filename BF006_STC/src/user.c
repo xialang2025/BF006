@@ -4,6 +4,7 @@
 #include "HT1622.h"
 #include "user.h"
 #include "configPar.h"
+#include "config_store.h" //20261114-4 add
 
 #define PAR_NUMB 23 //20260430-2 change
 
@@ -59,6 +60,9 @@ u16 editingData = 0;
 u16 editingMax = 0;
 u16 editingMin = 0;
 ParType_t editingType;
+#if BF006_CONFIG_STORE_ENABLED
+static u32 editing_revision; //20261114-4 add 进入编辑时保存配置版本
+#endif
 
 // 交换函数实现
 void swap(u16 *xp, u16 *yp)
@@ -86,6 +90,7 @@ void bubbleSort(u16 *arr, u8 n)
 
 u16 idata levle[3];
 
+#if !BF006_CONFIG_STORE_ENABLED
 void senSerModeCharge(void)
 {
     
@@ -111,6 +116,8 @@ void senSerModeCharge(void)
     updatSysdata();
 }
 
+#endif
+
 void interEidt(void)
 {
 
@@ -129,6 +136,9 @@ void interEidt(void)
     }
 
     editingType = par[sys.Setting_Index].type;
+#if BF006_CONFIG_STORE_ENABLED
+    editing_revision = config_revision;
+#endif
 
     #if (Model_OUT == Model_1C2)
 
@@ -214,6 +224,55 @@ void interEidt(void)
 
 }
 
+#if BF006_CONFIG_STORE_ENABLED
+#define CONFIG_OFFSET(member) ((u8)((u8 *)&config.member - (u8 *)&config))
+
+/******************************************************************************
+ * 函数名称       : Panel_Submit_Edit
+ * 功能描述       : 将面板参数及关联字节交给统一保存。
+ * 输入参数       : None
+ * 返回值         : 已受理或同值时返回一
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Panel_Submit_Edit(void) //20261114-4 add
+{
+    u8 offset;
+    u8 width;
+    u8 turn_offset;
+
+    Config_Observe_Changes();
+    if (editing_revision != config_revision || !Config_Panel_Available()) {
+        return 0;
+    }
+    width = par[sys.Setting_Index].Size;
+    offset = (u8)((u8 *)par[sys.Setting_Index].pSrc - (u8 *)&config);
+    if (sys.Setting_Index == 13) {
+        if (config.Sensor_Mode == (u8)editingData) {
+            return 1;
+        }
+        levle[0] = config.Sensor_STOP;
+        levle[1] = config.Sensor_ON1;
+        levle[2] = config.Sensor_ON2;
+        bubbleSort(levle, 3);
+        Config_Panel_Encode(0, CONFIG_OFFSET(Sensor_STOP),
+                            levle[editingData == CTROLTYPE_PUMP ? 2 : 0], 2);
+        Config_Panel_Encode(2, CONFIG_OFFSET(Sensor_ON1), levle[1], 2);
+        Config_Panel_Encode(4, CONFIG_OFFSET(Sensor_ON2),
+                            levle[editingData == CTROLTYPE_PUMP ? 0 : 2], 2);
+        Config_Panel_Encode(6, offset, editingData, 1);
+        return Config_Panel_Submit(7);
+    }
+    Config_Panel_Encode(0, offset, editingData, width);
+    if (sys.Setting_Index >= 2 && sys.Setting_Index <= 5 &&
+        *(u16 *)par[sys.Setting_Index].pSrc != editingData) {
+        turn_offset = sys.Setting_Index <= 3 ? CONFIG_OFFSET(A_Turn) : CONFIG_OFFSET(B_Turn);
+        Config_Panel_Encode(width, turn_offset, 1, 1);
+        width++;
+    }
+    return Config_Panel_Submit(width);
+}
+#endif
+
 void EidtEnter(void)
 {
 
@@ -222,6 +281,11 @@ void EidtEnter(void)
         return;
     }
 
+#if BF006_CONFIG_STORE_ENABLED
+    if (!Panel_Submit_Edit()) {
+        Speak_Con(0); //20261114-4 add 拒绝过时值及占用期间提交
+    }
+#else
     switch (par[sys.Setting_Index].Size)
     {
     case 1:
@@ -249,6 +313,7 @@ void EidtEnter(void)
     }
 
     updatSysdata();
+#endif
 }
 
 void reset_dev(u8 ty)

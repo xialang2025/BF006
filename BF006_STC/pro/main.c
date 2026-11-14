@@ -10,6 +10,7 @@
 #include "modbus.h"
 #include "uart4.h" //20261114-2 change 由主函数直接配置串口四
 #include "snapshot4g.h" //20261114-2 add
+#include "config_store.h" //20261114-4 add
 
 /******************** 主函数 **************************/
 void main(void)
@@ -79,6 +80,9 @@ void main(void)
 
             Display_Update();
             Beep();
+#if BF006_CONFIG_STORE_ENABLED
+            Config_Observe_Changes();
+#endif
             save_pro();
 			P54 = 0;
         }
@@ -137,6 +141,9 @@ void main(void)
 
 #if (Model_OUT == Model_1C1)
         Snapshot4G_Process(); //20261114-2 add 完成本轮运行及显示更新后才取快照
+#endif
+#if BF006_CONFIG_STORE_ENABLED
+        Config_Background(); //20261114-4 add 在逐字节擦写之间继续处理通信及保护
 #endif
     }
 }

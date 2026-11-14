@@ -42,7 +42,12 @@ def run_test(name, model, simulator, old_protocol=False):
         project = re.sub(r'<OutputName>.*?</OutputName>', '<OutputName>BF006Test</OutputName>', project)
         project = project.replace(r'<FilePath>.\main.c</FilePath>', r'<FilePath>.\test.c</FilePath>')
         project = project.replace('<FileName>main.c</FileName>', '<FileName>test.c</FileName>')
-        project = re.sub(r'<File>\s*<FileName>RS485\.c</FileName>.*?</File>', '', project, flags=re.S)
+        if name == 'config_store_test':
+            project = re.sub(r'<File>\s*<FileName>EEPROM\.c</FileName>.*?</File>', '', project, flags=re.S)
+            project = project.replace('<Define></Define>',
+                                      '<Define>BF006_CONFIG_SLOT_A=512,BF006_CONFIG_SLOT_B=1024</Define>', 1)
+        else:
+            project = re.sub(r'<File>\s*<FileName>RS485\.c</FileName>.*?</File>', '', project, flags=re.S)
         (pro / 'test.uvproj').write_text(project, encoding='utf-8')
         subprocess.run([keil, '-r', 'test.uvproj', '-j0', '-o', 'build.log'], cwd=pro, timeout=45)
         for _ in range(100):

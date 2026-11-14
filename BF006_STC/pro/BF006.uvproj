@@ -442,6 +442,11 @@
               <FilePath>..\src\configPar.c</FilePath>
             </File>
             <File>
+              <FileName>config_store.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\config_store.c</FilePath>
+            </File>
+            <File>
               <FileName>key.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\key.c</FilePath>

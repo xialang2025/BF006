@@ -1,6 +1,7 @@
 #include "eeprom.h"
 #include "system.h"
 #include "configPar.h"
+#include "config_store.h" //20261114-4 add
 #include "Display.h"
 #include "user.h"
 //20261113-0 del 封存旧协议头文件引用：#include "updata4G.h"
@@ -961,6 +962,18 @@ void Sys_Control(void)
 
     static u8 Pump_Flag_old = 0;
 
+#if BF006_CONFIG_STORE_ENABLED
+    if (!config_trusted) { //20261114-4 add 配置证据缺失时保持停机
+        sys.Pump_Flag = 0;
+        sys.Pump_A_ON = 0;
+        sys.Pump_B_ON = 0;
+        RELAY1 = 0;
+        RELAY2 = 0;
+        sys.Pump_A_state = 0;
+        sys.Pump_B_state = 0;
+        return;
+    }
+#endif
     if (sys.Pump_Flag == 1)
     {
         if (Pump_Flag_old == 0)
