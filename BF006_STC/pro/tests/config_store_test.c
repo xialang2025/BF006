@@ -142,6 +142,61 @@ static void Read_Board_Context(void) //20261114-15 add
 }
 
 /******************************************************************************
+ * 函数名称       : Board_Mode_Request
+ * 功能描述       : 发送运行模式变更或查询原操作号并核对结果。
+ * 输入参数       : operation 操作码，phase 预期阶段
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static void Board_Mode_Request(u8 operation, u8 phase) //20261114-16 add
+{
+    u8 frame[34];
+    u8 i;
+    u8 length;
+    u8 value;
+    u16 crc;
+
+    memset(frame, 0, sizeof(frame));
+    frame[0] = config.Dev_Address;
+    frame[1] = 0x43;
+    frame[2] = 0xBF;
+    frame[3] = 6;
+    frame[4] = 1;
+    frame[5] = operation;
+    frame[9] = operation == 0x10 ? 22 : 13;
+    frame[17] = 1;
+    frame[21] = 101;
+    if (operation == 0x10) {
+        frame[25] = 1;
+        frame[29] = 250;
+        frame[31] = 5;
+    }
+    length = frame[9] + 12;
+    crc = BF006_Modbus_CRC(frame, length - 2);
+    frame[length - 2] = (u8)crc;
+    frame[length - 1] = (u8)(crc >> 8);
+    for (i = 0; i < length; i++) {
+        S4BUF = frame[i];
+        S4CON |= 1;
+        UART4_int();
+    }
+    for (i = 0; i < 11; i++) {
+        Boot_Context_Tick();
+        UART4_Tick();
+    }
+    Snapshot4G_Process();
+    for (i = 0; i < 50; i++) {
+        value = S4BUF;
+        if ((i == 8 && value) || (i == 10 && value != 37) ||
+            (i == 31 && value != phase) || (i == 34 && value != (phase == 3 ? 6 : 1))) {
+            Test_Done();
+        }
+        SET_TI4();
+        UART4_int();
+    }
+}
+
+/******************************************************************************
  * 函数名称       : EEPROM_read_n
  * 功能描述       : 模拟非易失存储及一次提交标记读回异常。
  * 输入参数       : address 读取地址，destination 目标，length 长度
@@ -407,6 +462,23 @@ void main(void) //20261114-4 add
     Boot_Context_Init();
     uart_init();
     Read_Board_Context();
+
+    Test_Result = 15;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    mutations = 0;
+    Board_Mode_Request(0x10, 2);
+    if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
+        Test_Done();
+    }
+    for (loop = 0; loop < 300; loop++) {
+        Config_Background();
+    }
+    Board_Mode_Request(0x13, 3);
+    sys_init();
+    Par_Init();
+    if (config.Hand_Auto_timer_Flag != RUNMODE_AUTO) {
+        Test_Done();
+    }
 
     Test_Result = 7;
     memset(pages, 0xFF, sizeof(pages));

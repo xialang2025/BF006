@@ -186,6 +186,11 @@ extern u8 Snapshot_Test_Context(u32 *boot, u32 *revision, u32 *uptime);
 #else
 #define READ_CONTEXT Boot_Context_Read
 #endif
+#if defined(BF006_CYCLE_LIMIT) && BF006_CYCLE_LIMIT > 0 && BF006_CYCLE_LIMIT <= 1092
+#define SNAPSHOT_CYCLE_LIMIT BF006_CYCLE_LIMIT
+#else
+#define SNAPSHOT_CYCLE_LIMIT 0
+#endif
 static u32 Snapshot_Get32(u8 offset);
 static u32 context_boot = 0;
 static u32 context_time = 0;
@@ -258,6 +263,7 @@ static u8 Snapshot_Context_Reply(u8 *length) //20261114-14 add
         uart4_frame[57] = 2;
         Snapshot_Put16(58, 600);
         Snapshot_Put16(60, 10000);
+        Snapshot_Put16(64, SNAPSHOT_CYCLE_LIMIT);
         if (control_boot == boot) {
             memcpy(&uart4_frame[66], control_high_water, sizeof(control_high_water));
         }
@@ -701,10 +707,29 @@ static void Control_Capture(Control_Record xdata *entry, u32 revision, u32 now) 
 static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) //20261114-7 add
 {
     u8 target;
+#if BF006_CONFIG_STORE_ENABLED
+    u8 storage;
+#endif
 
     if (entry->phase != 2) {
         return;
     }
+#if BF006_CONFIG_STORE_ENABLED
+    if (entry->request[21] >= 4) {
+        storage = Config_Commit_Status();
+        if (storage == CONFIG_STORE_BUSY) {
+            return;
+        }
+        if (storage == CONFIG_STORE_SAVED && config.Hand_Auto_timer_Flag == entry->request[21] - 4) {
+            entry->phase = 3;
+        } else {
+            entry->phase = storage == CONFIG_STORE_UNCERTAIN ? 6 : 5;
+            entry->result = 0x28;
+        }
+        Control_Capture(entry, revision, now);
+        return;
+    }
+#endif
     target = entry->request[21] == 1;
     if (now < entry->accepted || now - entry->accepted >= 5000UL) {
         if (target && !sys.Pump_A_state) {
@@ -725,7 +750,7 @@ static void Control_Observe(Control_Record xdata *entry, u32 revision, u32 now) 
  * 返回值         : 协议结果码
  * 日期            : 2026.11.14
  ******************************************************************************/
-static u8 Control_Reply(u8 *length) //20261114-11 change
+static u8 Control_Reply(u8 *length) //20261114-16 change
 {
     Control_Record xdata *entry;
     u8 i;
@@ -735,6 +760,9 @@ static u8 Control_Reply(u8 *length) //20261114-11 change
     u8 result;
     u8 historical;
     u8 query;
+#if BF006_CONFIG_STORE_ENABLED
+    u8 submitted;
+#endif
     u16 pump_state;
     u32 boot;
     u32 revision;
@@ -806,6 +834,10 @@ static u8 Control_Reply(u8 *length) //20261114-11 change
                 if (action <= 2) {
                     if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
                         entry->result = 0x20;
+#ifndef BF006_CONTEXT_SIMULATION
+                    } else if (action == 1 && (!Boot_Flag || !Config_Panel_Available())) {
+                        entry->result = 6;
+#endif
                     } else if (action == 1 && (sys.Fault_A_Flag || sys.Fault_Error || config.Lock1)) {
                         entry->result = 0x22;
                     } else {
@@ -825,10 +857,23 @@ static u8 Control_Reply(u8 *length) //20261114-11 change
                         entry->result = (sys.Fault_Error || sys.Fault_A_Flag) ? 0x22 : 0;
                         entry->phase = entry->result ? 5 : 3;
                     }
+                } else if (action == 6 && (!SNAPSHOT_CYCLE_LIMIT || !config.AUTO_Timing_Run ||
+                           !config.AUTO_Timing_Stop || config.AUTO_Timing_Run > SNAPSHOT_CYCLE_LIMIT ||
+                           config.AUTO_Timing_Stop > SNAPSHOT_CYCLE_LIMIT)) {
+                    entry->result = 0x30;
                 } else if (config.Hand_Auto_timer_Flag == action - 4) {
                     entry->phase = 4;
                 } else {
+#if BF006_CONFIG_STORE_ENABLED
+                    submitted = Config_Stage_Mode(action - 4);
+                    if (submitted == CONFIG_STORE_BUSY) {
+                        entry->phase = 2;
+                    } else {
+                        entry->result = submitted == CONFIG_STORE_LOCKED ? 6 : 0x28;
+                    }
+#else
                     entry->result = 0x30; // 模式切换等待统一保存和循环能力验证
+#endif
                 }
                 Control_Capture(entry, revision, now);
             }
@@ -912,14 +957,18 @@ void Snapshot4G_Process(void) //20261114-9 change
             result = SNAPSHOT_CONTEXT_UNAVAILABLE;
 #endif
         }
-#ifdef BF006_CONTEXT_SIMULATION
+#if BF006_BOARD_CONTEXT || defined(BF006_CONTEXT_SIMULATION)
     } else if (uart4_frame[5] == 0x11 || uart4_frame[5] == 0x12) {
+#ifdef BF006_CONTEXT_SIMULATION
         if (uart4_frame[8] || (uart4_frame[5] == 0x11 && (length != 38 || uart4_frame[9] != 26)) ||
             (uart4_frame[5] == 0x12 && (length < 35 || length != uart4_frame[9] + 12))) {
             result = 3;
         } else {
             result = Snapshot_Setting_Reply(&data_length);
         }
+#else
+        result = 2;
+#endif
     } else if (uart4_frame[5] == 0x10 || uart4_frame[5] == 0x13) {
         if (uart4_frame[8] || (uart4_frame[5] == 0x10 && (length != 34 || uart4_frame[9] != 22)) ||
             (uart4_frame[5] == 0x13 && (length != 25 || uart4_frame[9] != 13))) {
