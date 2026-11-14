@@ -316,19 +316,60 @@ static u8 Snapshot_Check_Setting(u8 field, u32 value, u32 *minimum, u32 *maximum
 }
 
 /******************************************************************************
+ * 函数名称       : Snapshot_Check_Water_Group
+ * 功能描述       : 核对供排水组的三个最终目标值。
+ * 输入参数       : None
+ * 返回值         : 协议拒绝码或零，change 用于返回是否有实质变更
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Check_Water_Group(u8 *change) //20261114-9 add
+{
+    u32 direction;
+    u32 start;
+    u32 stop;
+
+    if (uart4_frame[9] != 38 || uart4_frame[32] != 3 ||
+        uart4_frame[33] != 16 || uart4_frame[38] != 18 || uart4_frame[43] != 19) {
+        return 3;
+    }
+    direction = Snapshot_Get32(34);
+    start = Snapshot_Get32(39);
+    stop = Snapshot_Get32(44);
+    if (direction > CTROLTYPE_DRAIN || start > 0xFFFFUL || stop > 0xFFFFUL) {
+        return 0x2A;
+    }
+    if (config.Auto_Mode <= SENSORTYPE_PRESS) {
+        if (start != config.Sensor_ON1 || stop != config.Sensor_STOP) {
+            return 0x24;
+        }
+    } else if (config.Auto_Mode > SENSORTYPE_PRESS0_5V) {
+        return 0x20;
+    } else if (start > config.Sensor_Rang || stop > config.Sensor_Rang || start > 9999 || stop > 9999) {
+        return 0x23;
+    } else if ((direction == CTROLTYPE_PUMP && start >= stop) ||
+               (direction == CTROLTYPE_DRAIN && start <= stop)) {
+        return 0x24;
+    }
+    *change = (direction != config.Sensor_Mode || start != config.Sensor_ON1 || stop != config.Sensor_STOP);
+    return 0;
+}
+
+/******************************************************************************
  * 函数名称       : Snapshot_Setting_Reply
  * 功能描述       : 验证单写并返回实际值，存储尚未接入时拒绝改变配置。
  * 输入参数       : length 返回的数据区长度
  * 返回值         : 协议结果码
  * 日期            : 2026.11.14
  ******************************************************************************/
-static u8 Snapshot_Setting_Reply(u8 *length) //20261114-8 add
+static u8 Snapshot_Setting_Reply(u8 *length) //20261114-9 change
 {
     u8 field;
     u8 mode;
     u8 result;
     u8 flags;
     u8 phase;
+    u8 group;
+    u8 changed;
     u32 boot;
     u32 revision;
     u32 now;
@@ -341,7 +382,8 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-8 add
     if (!Snapshot_Test_Context(&boot, &revision, &now)) {
         return SNAPSHOT_CONTEXT_UNAVAILABLE;
     }
-    field = uart4_frame[31];
+    group = uart4_frame[5] == 0x12;
+    field = group ? 0 : uart4_frame[31];
     mode = uart4_frame[30];
     deadline = Snapshot_Get32(26);
     value = Snapshot_Get32(32);
@@ -366,6 +408,16 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-8 add
         result = 0x20;
     } else if (sys.Pump_A_state || sys.Pump_A_ON) {
         result = 0x21;
+    } else if (group) {
+        changed = 0;
+        result = uart4_frame[31] == 1 ? Snapshot_Check_Water_Group(&changed) : 0x02;
+        if (!result) {
+            if (changed) {
+                result = 0x30;
+            } else {
+                phase = 4;
+            }
+        }
     } else {
         result = Snapshot_Check_Setting(field, value, &minimum, &maximum);
         if ((!result || result == 0x23) && minimum <= maximum) {
@@ -668,7 +720,7 @@ static u8 Control_Reply(u8 *length) //20261114-7 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-void Snapshot4G_Process(void) //20261114-8 change
+void Snapshot4G_Process(void) //20261114-9 change
 {
     u8 length;
     u8 result;
@@ -712,8 +764,9 @@ void Snapshot4G_Process(void) //20261114-8 change
 #endif
         }
 #ifdef BF006_CONTEXT_SIMULATION
-    } else if (uart4_frame[5] == 0x11) {
-        if (length != 38 || uart4_frame[8] || uart4_frame[9] != 26) {
+    } else if (uart4_frame[5] == 0x11 || uart4_frame[5] == 0x12) {
+        if (uart4_frame[8] || (uart4_frame[5] == 0x11 && (length != 38 || uart4_frame[9] != 26)) ||
+            (uart4_frame[5] == 0x12 && (length < 35 || length != uart4_frame[9] + 12))) {
             result = 3;
         } else {
             result = Snapshot_Setting_Reply(&data_length);

@@ -285,6 +285,45 @@ void main(void) //20261114-6 add
     if (reply[8] || reply[31] != 4 || reply[35] != 17) {
         Test_Done();
     }
+
+    Test_Result = 40;
+    frame[5] = 0x12;
+    frame[9] = 38;
+    frame[31] = 1;
+    frame[32] = 3;
+    memset(&frame[33], 0, 15);
+    frame[33] = 16;
+    frame[37] = 1;
+    frame[38] = 18;
+    frame[41] = 2;
+    frame[42] = 142;
+    frame[43] = 19;
+    frame[47] = 123;
+    Exchange(50, 50);
+    if (reply[8] || reply[31] != 4) {
+        Test_Done();
+    }
+    frame[38] = 19;
+    Exchange(50, 50);
+    if (reply[8] != 3) {
+        Test_Done();
+    }
+    frame[38] = 18;
+    frame[37] = 0;
+    Exchange(50, 50);
+    if (reply[8] != 0x24 || config.Sensor_Mode != CTROLTYPE_DRAIN || config.Sensor_ON1 != 654) {
+        Test_Done();
+    }
+    config.Auto_Mode = SENSORTYPE_POLE;
+    Exchange(50, 50);
+    if (reply[8] != 0x30 || config.Sensor_Mode != CTROLTYPE_DRAIN) {
+        Test_Done();
+    }
+    frame[47] = 124;
+    Exchange(50, 50);
+    if (reply[8] != 0x24 || config.Sensor_STOP != 123) {
+        Test_Done();
+    }
     Test_Result = 0;
     Test_Done();
 }
