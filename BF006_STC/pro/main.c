@@ -12,6 +12,10 @@
 #include "snapshot4g.h" //20261114-2 add
 #include "config_store.h" //20261114-4 add
 
+#if BF006_CONFIG_STORE_ENABLED && Function_RF
+extern void RF_Process(void);
+#endif
+
 /******************** Ö÷º¯Êý **************************/
 void main(void)
 {
@@ -39,6 +43,9 @@ void main(void)
 #endif
     while(1)
     {
+#if BF006_CONFIG_STORE_ENABLED && Function_RF
+        RF_Process(); //20261114-13 add
+#endif
 #if (Function_RS485 == 1)
         Modbus_analysis();
 #endif

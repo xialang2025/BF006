@@ -1,6 +1,7 @@
 
 #include "system.h"
 #include "configPar.h"
+#include "config_store.h" //20261114-13 add
 
 
 
@@ -25,6 +26,10 @@
 extern void Speak_Con(u8 type);
 
 
+#if BF006_CONFIG_STORE_ENABLED
+static volatile u32 rf_pending;
+static volatile u8 rf_pending_ready;
+#endif
 u32 RF_Value_Rev	= 0x0000;		//接收到的数据
 u8 Rev_flag = 0;					//接收标志
 u8 Rev_Down = 0;
@@ -61,7 +66,9 @@ u8 pipe(void)
 //目前执行时间间隔为10000/秒，即为100us
 void RF_Decord(void)
 {
+#if !BF006_CONFIG_STORE_ENABLED
     u8 i;
+#endif
 
     Cycle_Cnt++;	//计数器累加
 
@@ -131,7 +138,9 @@ void RF_Decord(void)
 
         if((Cmd_Decord_New==Cmd_Decord_Last)&(Cmd_Decord_New!=0))	//两次接收的码都是一样时，且不为0
         {
+#if !BF006_CONFIG_STORE_ENABLED
             RF_Value_Rev 	= Cmd_Decord_New;
+#endif
             if(Rev_Down==0)	Rev_flag = 1;
             Rev_Down = 1;
         }
@@ -148,6 +157,15 @@ void RF_Decord(void)
     }
 
 
+#if BF006_CONFIG_STORE_ENABLED
+    if (Rev_flag) {
+        Rev_flag = 0;
+        if (!rf_pending_ready || (Cmd_Decord_Last & 0x0F) == RFCODE_PUMP_A_STOP) {
+            rf_pending = Cmd_Decord_Last;
+            rf_pending_ready = 1;
+        }
+    }
+#else
     //RF 按键处理
     if(Rev_flag==1)
     {
@@ -264,7 +282,73 @@ void RF_Decord(void)
             }
         }
     }
+#endif
 }
+
+#if BF006_CONFIG_STORE_ENABLED
+/******************************************************************************
+ * 函数名称       : RF_Process
+ * 功能描述       : 在主循环处理遥控动作，避免中断修改保存候选。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void RF_Process(void) //20261114-13 add
+{
+    bit interrupt_enabled;
+    u8 command;
+    u8 i;
+
+    if (!rf_pending_ready) {
+        return;
+    }
+    interrupt_enabled = EA;
+    EA = 0;
+    RF_Value_Rev = rf_pending;
+    rf_pending_ready = 0;
+    EA = interrupt_enabled;
+    if (sys.RF_Key_Flag) {
+        if (pipe() == 0 && Config_Panel_Available()) {
+            Config_Panel_Encode(0, CONFIG_OFFSET(RF_Family), (u16)(RF_Value_Rev >> 8), 2);
+            for (i = 1; i < 5; i++) {
+                Config_Panel_Encode(i * 2, CONFIG_OFFSET(RF_Family) + i * 2, config.RF_Family[i - 1], 2);
+            }
+            Config_Panel_Submit(10);
+        }
+        sys.RF_Key_Flag = 0;
+        Speak_Con(2);
+        return;
+    }
+    if (!pipe()) {
+        return;
+    }
+    command = (u8)RF_Value_Rev & 0x0F;
+    if (command != RFCODE_PUMP_A_STOP && command != RFCODE_PUMP_A_OPEN) {
+        return;
+    }
+    Speak_Con(0);
+    if (sys.Record_Dis_Flag) {
+        sys.Record_Dis_Flag = 0;
+        return;
+    }
+    if (command == RFCODE_PUMP_A_STOP) {
+        sys.Pump_A_ON = 0;
+        sys.Pump_Flag = 0;
+        RELAY1 = 0;
+        sys.Pump_A_state = 0;
+        if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
+            config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+            Config_Observe_Changes();
+        }
+        if (sys.Fault_A_Flag) {
+            clear_A_Fault();
+        }
+    } else if (config_trusted && Config_Panel_Available() && !sys.Fault_A_Flag &&
+               config.Hand_Auto_timer_Flag == RUNMODE_MANUAL) {
+        sys.Pump_A_ON = 1;
+    }
+}
+#endif
 
 #endif
 

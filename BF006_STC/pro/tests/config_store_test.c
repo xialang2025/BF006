@@ -1,6 +1,7 @@
 #include "config_store.h"
 #include "EEPROM.h"
 #include "boot_identity.h"
+#include "Modbus_New.h"
 
 #define PAGE_SIZE 128
 #define FIRST_PAGE 0
@@ -23,6 +24,55 @@ static Config_Byte_Edit xdata edits[2];
 static u8 cut_at;
 static u8 mutations;
 static u8 corrupt_commit_read;
+static u8 rs485_reply;
+
+/******************************************************************************
+ * 函数名称       : M_Uart_Send_Block
+ * 功能描述       : 捕获现场串口写入应答的功能码。
+ * 输入参数       : frame 应答数据，length 字节数
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void M_Uart_Send_Block(u8 *frame, u8 length)
+{
+    if (length >= 5) {
+        rs485_reply = frame[1];
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : Write_Range
+ * 功能描述       : 通过现场串口接收入口写入传感器量程。
+ * 输入参数       : value 量程原始值
+ * 返回值         : 应答功能码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Write_Range(u16 value) //20261114-13 add
+{
+    u8 frame[8];
+    u8 i;
+    u16 crc;
+
+    frame[0] = config.Dev_Address;
+    frame[1] = 6;
+    frame[2] = 0;
+    frame[3] = 14;
+    frame[4] = value >> 8;
+    frame[5] = (u8)value;
+    crc = BF006_Modbus_CRC(frame, 6);
+    frame[6] = (u8)crc;
+    frame[7] = crc >> 8;
+    memset(&RecData, 0, sizeof(RecData));
+    rs485_reply = 0;
+    for (i = 0; i < sizeof(frame); i++) {
+        Modbus_Receive_handle(frame[i]);
+    }
+    for (i = 0; i < 11; i++) {
+        Modbus_Timer_handle();
+    }
+    Modbus_analysis();
+    return rs485_reply;
+}
 
 /******************************************************************************
  * 函数名称       : EEPROM_read_n
@@ -262,6 +312,20 @@ void main(void) //20261114-4 add
     }
     if (config.Sensor_Mode != CTROLTYPE_DRAIN || config.Sensor_STOP != 10 ||
         config.Sensor_ON1 != 50 || config.Sensor_ON2 != 90) {
+        Test_Done();
+    }
+
+    Test_Result = 13;
+    mutations = 0;
+    if (Write_Range(150) != 6 || config.Sensor_Rang != 9999 || Write_Range(160) != 0x86) {
+        Test_Done();
+    }
+    for (loop = 0; loop < 300; loop++) {
+        Config_Background();
+    }
+    sys_init();
+    Par_Init();
+    if (config.Sensor_Rang != 150 || sys.Sensor_Rang != 1500) {
         Test_Done();
     }
 

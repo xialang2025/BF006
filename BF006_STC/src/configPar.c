@@ -20,6 +20,7 @@ u32 config_revision;
 static u8 storage_saving;
 static u8 storage_rescan;
 static u8 panel_pending;
+static u8 commit_status;
 static u8 panel_saved_dirty;
 static u16 settings_crc;
 Config_Byte_Edit xdata panel_edits[CONFIG_PANEL_EDITS];
@@ -99,6 +100,7 @@ void Par_Init(void) //20260729-13 change
 
     storage_saving = 0;
     storage_rescan = 0;
+    commit_status = CONFIG_STORE_READY;
     panel_pending = 0;
     panel_saved_dirty = 0;
     config_revision = 1;
@@ -360,27 +362,83 @@ void Config_Panel_Encode(u8 index, u8 offset, u16 value, u8 width) //20261114-4 
 }
 
 /******************************************************************************
- * 函数名称       : Config_Panel_Submit
- * 功能描述       : 提交面板整组候选，确认后才写入运行配置。
+ * 函数名称       : Config_Submit
+ * 功能描述       : 提交整组候选，确认后才写入运行配置。
  * 输入参数       : count 候选字节数，按配置偏移递增
  * 返回值         : 已受理或同值时返回一
  * 日期            : 2026.11.14
  ******************************************************************************/
-u8 Config_Panel_Submit(u8 count) //20261114-4 add
+u8 Config_Submit(u8 count) //20261114-13 change
 {
     u8 result;
+    u8 i;
+    u8 j;
+    Config_Byte_Edit item;
 
     if (!count || count > CONFIG_PANEL_EDITS || !Config_Panel_Available()) {
-        return 0;
+        return CONFIG_STORE_LOCKED;
+    }
+    for (i = 1; i < count; i++) {
+        item = panel_edits[i];
+        j = i;
+        while (j && panel_edits[j - 1].offset > item.offset) {
+            panel_edits[j] = panel_edits[j - 1];
+            j--;
+        }
+        panel_edits[j] = item;
     }
     result = Config_Store_Begin((u8 *)&config, panel_edits, count);
+    commit_status = result;
     storage_saving = (result == CONFIG_STORE_BUSY);
     panel_pending = storage_saving ? count : 0;
     if (storage_saving) {
         panel_saved_dirty = sys.save_flag;
         sys.save_flag = 0;
     }
-    return storage_saving || result == CONFIG_STORE_READY;
+    return result;
+}
+
+/******************************************************************************
+ * 函数名称       : Config_Panel_Submit
+ * 功能描述       : 按面板入口约定返回已受理或同值。
+ * 输入参数       : count 候选字节数
+ * 返回值         : 已受理或同值时返回一
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u8 Config_Panel_Submit(u8 count) //20261114-13 add
+{
+    u8 result;
+
+    result = Config_Submit(count);
+    return result == CONFIG_STORE_BUSY || result == CONFIG_STORE_READY;
+}
+
+/******************************************************************************
+ * 函数名称       : Config_Commit_Status
+ * 功能描述       : 提供最近一组显式提交的状态。
+ * 输入参数       : None
+ * 返回值         : 提交状态
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u8 Config_Commit_Status(void) //20261114-13 add
+{
+    return commit_status;
+}
+
+/******************************************************************************
+ * 函数名称       : Config_Stage_Mode
+ * 功能描述       : 通过统一提交切换运行模式。
+ * 输入参数       : mode 目标模式
+ * 返回值         : 提交状态
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+u8 Config_Stage_Mode(u8 mode) //20261114-13 add
+{
+    if (mode > RUNMODE_TIMER || !Config_Panel_Available()) {
+        return CONFIG_STORE_LOCKED;
+    }
+    Config_Panel_Encode(0, CONFIG_OFFSET(Hand_Auto_timer_Flag), mode, 1);
+    return Config_Submit(1);
 }
 
 /******************************************************************************
@@ -395,7 +453,9 @@ void Config_Background(void) //20261114-4 add
     u8 result;
     u8 i;
     u8 matched;
+    u8 old_mode;
 
+    old_mode = config.Hand_Auto_timer_Flag;
     if (storage_rescan) {
         storage_rescan = 0;
         result = Config_Store_Open(BF006_CONFIG_SLOT_A, BF006_CONFIG_SLOT_B, (u8 *)&config);
@@ -427,11 +487,18 @@ void Config_Background(void) //20261114-4 add
         return;
     }
     storage_saving = 0;
+    if (panel_pending) {
+        commit_status = result == CONFIG_STORE_READY ? CONFIG_STORE_FAILED : result;
+    }
     if (result == CONFIG_STORE_SAVED) {
         updatSysdata();
         if (panel_pending) {
             config_revision++;
             settings_crc = Config_Settings_CRC();
+            if (old_mode != config.Hand_Auto_timer_Flag && config.Hand_Auto_timer_Flag == RUNMODE_TIMER) {
+                sys.autoTimerFlag = 1;
+                sys.Auto_timer_count = 0;
+            }
         }
     } else if (result == CONFIG_STORE_UNCERTAIN) {
         storage_rescan = 1;

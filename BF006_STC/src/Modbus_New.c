@@ -5,6 +5,7 @@
 #include "HT1622.h" //20260713-0 add 读取上下水池当前六段液晶显示状态
 #include "user.h"
 #include "Modbus_New.h"
+#include "config_store.h" //20261114-13 add
 #include "string.h"
 
 #if (Model_OUT == Model_1C1) || (Function_RS485 == 1 && MODBUS_USE_OLD_PROTOCOL == 0)
@@ -346,6 +347,7 @@ static u8 modbus_new_check_param(u16 addr, u16 value) //20260430-3 change
  * Return         : None
  * Date            : 2026.04.30
  ******************************************************************************/
+#if !BF006_CONFIG_STORE_ENABLED
 static void modbus_new_apply_run_mode(u16 value) //20260430-0 add
 {
     config.Hand_Auto_timer_Flag = (u8)value;
@@ -356,6 +358,8 @@ static void modbus_new_apply_run_mode(u16 value) //20260430-0 add
     }
 }
 
+#endif
+
 /******************************************************************************
  * Function       : modbus_new_write_param
  * Description       : Write a valid parameter value to the BF006 configuration structure.
@@ -363,6 +367,63 @@ static void modbus_new_apply_run_mode(u16 value) //20260430-0 add
  * Return         : None
  * Date            : 2026.04.30
  ******************************************************************************/
+#if BF006_CONFIG_STORE_ENABLED
+static const struct {
+    u8 *address;
+    u8 width;
+} code rs485_settings[] = {
+    {&config.OVP_Value, 2},
+    {&config.UVP_Value, 2},
+    {&config.Set_STANDBY_Current1, 2},
+    {&config.Set_OVERLOAD_Current1, 2},
+    {&config.Set_STANDBY_Current2, 2},
+    {&config.Set_OVERLOAD_Current2, 2},
+    {&config.AUTO_Timing_Run, 2},
+    {&config.AUTO_Timing_Stop, 2},
+    {&config.Timer_Standby_Restart, 2},
+    {&config.Timer_Unload_Restart, 2},
+    {&config.AUTO_FANGXIU, 2},
+    {&config.Dev_Address, 1},
+    {&config.Pump_AB_Mode, 1},
+    {&config.Sensor_Mode, 1},
+    {&config.Sensor_Rang, 2},
+    {&config.Sensor_STOP, 2},
+    {&config.Sensor_ON1, 2},
+    {&config.Sensor_ON2, 2},
+    {&config.Auto_Mode, 1},
+    {&config.fault_mask, 1},
+    {&config.Sensor_overFlow, 2},
+};
+
+/******************************************************************************
+ * 函数名称       : Modbus_Stage_Parameters
+ * 功能描述       : 将已验证的现场串口参数一次交给配置提交。
+ * 输入参数       : address 起始参数，count 项数，data_offset 请求数据偏移
+ * 返回值         : 同值或已受理时返回一
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Modbus_Stage_Parameters(u16 address, u8 count, u8 data_offset) //20261114-13 add
+{
+    u8 i;
+    u8 used;
+    u8 width;
+    u8 offset;
+
+    if (!Config_Panel_Available() || (sys.Setting_Flag == 2 && sys.Setting_Index < 21)) {
+        return 0;
+    }
+    used = 0;
+    for (i = 0; i < count; i++) {
+        width = rs485_settings[address + i].width;
+        offset = (u8)(rs485_settings[address + i].address - (u8 *)&config);
+        Config_Panel_Encode(used, offset, modbus_new_get_u16(RecData.Rec_Data, data_offset + i * 2), width);
+        used += width;
+    }
+    return Config_Panel_Submit(used);
+}
+#endif
+
+#if !BF006_CONFIG_STORE_ENABLED
 static void modbus_new_write_param(u16 addr, u16 value) //20260430-3 change
 {
     switch (addr)
@@ -440,6 +501,8 @@ static void modbus_new_write_param(u16 addr, u16 value) //20260430-3 change
 
     sys.save_flag = 1;
 }
+
+#endif
 
 /******************************************************************************
  * Function       : modbus_new_run_status
@@ -965,9 +1028,17 @@ static u8 modbus_new_control(u16 addr, u16 value) //20260430-0 add
         if (value <= RUNMODE_TIMER)
         {
             Speak_Con(0);
+#if BF006_CONFIG_STORE_ENABLED
+            if (sys.Setting_Flag == 2 && sys.Setting_Index < 21) {
+                return 0;
+            }
+            i = Config_Stage_Mode((u8)value);
+            return i == CONFIG_STORE_READY || i == CONFIG_STORE_BUSY;
+#else
             modbus_new_apply_run_mode(value);
             sys.save_flag = 1;
             return 1;
+#endif
         }
         break;
     case 0x2004:
@@ -1097,7 +1168,14 @@ static void modbus_new_handle_write_one(void) //20260430-0 add
             modbus_new_send_err(RecData.Rec_Data[0], MODBUS_NEW_FUNC_WRITE_ONE, MODBUS_NEW_ERR_DATA);
             return;
         }
+#if BF006_CONFIG_STORE_ENABLED
+        if (!Modbus_Stage_Parameters(addr, 1, 4)) {
+            modbus_new_send_err(RecData.Rec_Data[0], MODBUS_NEW_FUNC_WRITE_ONE, 6);
+            return;
+        }
+#else
         modbus_new_write_param(addr, value);
+#endif
         M_Uart_Send_Block(RecData.Rec_Data, RecData.Rec_Len);
         return;
     }
@@ -1167,11 +1245,18 @@ static void modbus_new_handle_write_more(void) //20260430-0 add
         }
     }
 
+#if BF006_CONFIG_STORE_ENABLED
+    if (!Modbus_Stage_Parameters(start_addr, (u8)qty, 7)) {
+        modbus_new_send_err(RecData.Rec_Data[0], MODBUS_NEW_FUNC_WRITE_MORE, 6);
+        return;
+    }
+#else
     for (i = 0; i < qty; i++)
     {
         value = modbus_new_get_u16(RecData.Rec_Data, (u8)(7 + i * 2));
         modbus_new_write_param(start_addr + i, value);
     }
+#endif
 
     send_buf[0] = RecData.Rec_Data[0];
     send_buf[1] = MODBUS_NEW_FUNC_WRITE_MORE;
@@ -1231,8 +1316,20 @@ static void modbus_new_broadcast_set_addr(void) //20260430-0 add
     }
 
     M_Uart_Send_Block(RecData.Rec_Data, RecData.Rec_Len);
+#if BF006_CONFIG_STORE_ENABLED
+    if (!Config_Panel_Available() || (sys.Setting_Flag == 2 && sys.Setting_Index < 21)) {
+        modbus_new_send_err(MODBUS_NEW_ADDR_BROADCAST, MODBUS_NEW_FUNC_SET_ADDR, 6);
+        return;
+    }
+    Config_Panel_Encode(0, CONFIG_OFFSET(Dev_Address), new_addr, 1);
+    if (!Config_Panel_Submit(1)) {
+        modbus_new_send_err(MODBUS_NEW_ADDR_BROADCAST, MODBUS_NEW_FUNC_SET_ADDR, 6);
+        return;
+    }
+#else
     config.Dev_Address = new_addr;
     sys.save_flag = 1;
+#endif
 }
 
 /******************************************************************************

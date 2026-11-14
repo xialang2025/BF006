@@ -29,7 +29,8 @@ u8 Config_Store_Begin(const u8 *payload, const Config_Byte_Edit *edits, u8 count
 u8 Config_Store_Step(void);
 void Config_Store_Cancel(void);
 
-#define CONFIG_PANEL_EDITS 8
+#define CONFIG_PANEL_EDITS 16
+#define CONFIG_OFFSET(member) ((u8)((u8 *)&config.member - (u8 *)&config))
 extern Config_Byte_Edit xdata panel_edits[CONFIG_PANEL_EDITS];
 extern u8 config_trusted;
 extern u32 config_revision;
@@ -37,6 +38,9 @@ void Config_Background(void);
 u8 Config_Panel_Available(void);
 u8 Config_Panel_Submit(u8 count);
 void Config_Panel_Encode(u8 index, u8 offset, u16 value, u8 width);
+u8 Config_Submit(u8 count);
+u8 Config_Commit_Status(void);
+u8 Config_Stage_Mode(u8 mode);
 void Config_Observe_Changes(void);
 #endif
 

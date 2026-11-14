@@ -225,7 +225,6 @@ void interEidt(void)
 }
 
 #if BF006_CONFIG_STORE_ENABLED
-#define CONFIG_OFFSET(member) ((u8)((u8 *)&config.member - (u8 *)&config))
 
 /******************************************************************************
  * 函数名称       : Panel_Submit_Edit
@@ -377,6 +376,10 @@ void reset_dev(u8 ty)
 // 处理6个按键程序
 void KEY_Control(void)
 {
+#if BF006_CONFIG_STORE_ENABLED
+    u8 target_mode;
+    u8 submitted;
+#endif
     u8 i;
     static u8 flag_mode_change = 0;
 
@@ -516,6 +519,21 @@ void KEY_Control(void)
                 else
                 {
                     Speak_Con(0);
+#if BF006_CONFIG_STORE_ENABLED
+                    target_mode = RUNMODE_MANUAL;
+                    if (config.Hand_Auto_timer_Flag == RUNMODE_MANUAL) {
+                        target_mode = flag_mode_change ? RUNMODE_TIMER : RUNMODE_AUTO;
+                    }
+                    submitted = Config_Stage_Mode(target_mode);
+                    if (submitted == CONFIG_STORE_BUSY || submitted == CONFIG_STORE_READY) {
+                        if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
+                            flag_mode_change = config.Hand_Auto_timer_Flag == RUNMODE_AUTO;
+                        }
+                        sys.Pump_Flag = 0;
+                        sys.Pump_A_ON = 0;
+                        sys.Pump_B_ON = 0;
+                    }
+#else
                     if (config.Hand_Auto_timer_Flag == RUNMODE_AUTO)
                     {
                         config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
@@ -548,6 +566,7 @@ void KEY_Control(void)
                         sys.autoTimerFlag = 1;
                         sys.Auto_timer_count = 0;
                     }
+#endif
                 }
             }
 
