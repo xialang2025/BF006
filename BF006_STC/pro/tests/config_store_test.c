@@ -2,6 +2,8 @@
 #include "EEPROM.h"
 #include "boot_identity.h"
 #include "Modbus_New.h"
+#include "snapshot4g.h"
+#include "uart4.h"
 
 #define PAGE_SIZE 128
 #define FIRST_PAGE 0
@@ -9,7 +11,7 @@
 #define PAYLOAD_OFFSET 8
 #define COMMIT_OFFSET 127
 #define LEGACY_PAGE_SIZE 512
-#define SIMULATED_IAP_SIZE (3 * LEGACY_PAGE_SIZE)
+#define SIMULATED_IAP_SIZE (5 * LEGACY_PAGE_SIZE)
 #define IDENTITY_PAGE_A 1280
 #define IDENTITY_PAGE_B 1312
 #define IDENTITY_SECTOR_SIZE 32
@@ -18,13 +20,30 @@ volatile u8 xdata Test_Result _at_ 0x0BFE;
 extern void interEidt(void);
 extern void EidtEnter(void);
 extern u16 editingData;
-static u8 xdata pages[SIMULATED_IAP_SIZE];
+static u8 xdata pages[SIMULATED_IAP_SIZE - 2 * (LEGACY_PAGE_SIZE - PAGE_SIZE)];
 static u8 xdata payload[CONFIG_STORE_SIZE];
 static Config_Byte_Edit xdata edits[2];
 static u8 cut_at;
 static u8 mutations;
 static u8 corrupt_commit_read;
 static u8 rs485_reply;
+extern void UART4_int(void);
+void Test_Done(void);
+
+/******************************************************************************
+ * 函数名称       : IAP_Test_Address
+ * 功能描述       : 压缩两个身份扇区的空余测试空间。
+ * 输入参数       : address 模拟逻辑地址
+ * 返回值         : 模拟数组偏移
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u16 IAP_Test_Address(u16 address) //20261114-15 add
+{
+    if (address >= BF006_BOOT_SLOT_B) {
+        return address - (LEGACY_PAGE_SIZE - PAGE_SIZE);
+    }
+    return address;
+}
 
 /******************************************************************************
  * 函数名称       : M_Uart_Send_Block
@@ -75,6 +94,54 @@ static u8 Write_Range(u16 value) //20261114-13 add
 }
 
 /******************************************************************************
+ * 函数名称       : Read_Board_Context
+ * 功能描述       : 从串口四读取真实身份日志和定时器发布的单项结果。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static void Read_Board_Context(void) //20261114-15 add
+{
+    u8 frame[14];
+    u8 index;
+    u8 value;
+    u16 crc;
+
+    memset(frame, 0, sizeof(frame));
+    frame[0] = config.Dev_Address;
+    frame[1] = 0x43;
+    frame[2] = 0xBF;
+    frame[3] = 6;
+    frame[4] = 1;
+    frame[5] = 4;
+    frame[9] = 2;
+    frame[10] = 17;
+    crc = BF006_Modbus_CRC(frame, 12);
+    frame[12] = (u8)crc;
+    frame[13] = (u8)(crc >> 8);
+    for (index = 0; index < 14; index++) {
+        S4BUF = frame[index];
+        S4CON |= 1;
+        UART4_int();
+    }
+    for (index = 0; index < 11; index++) {
+        Boot_Context_Tick();
+        UART4_Tick();
+    }
+    Snapshot4G_Process();
+    for (index = 0; index < 50; index++) {
+        value = S4BUF;
+        if ((index == 8 && value) || (index == 10 && value != 37) ||
+            (index == 22 && value != 101) || (index == 30 && value != 11) ||
+            (index == 35 && value != 17) || (index == 39 && value != 150)) {
+            Test_Done();
+        }
+        SET_TI4();
+        UART4_int();
+    }
+}
+
+/******************************************************************************
  * 函数名称       : EEPROM_read_n
  * 功能描述       : 模拟非易失存储及一次提交标记读回异常。
  * 输入参数       : address 读取地址，destination 目标，length 长度
@@ -84,7 +151,8 @@ static u8 Write_Range(u16 value) //20261114-13 add
 void EEPROM_read_n(u16 address, u8 *destination, u16 length)
 {
     while (length--) {
-        *destination = pages[address];
+        *destination = address >= BF006_BOOT_SLOT_A && (address & 511) >= PAGE_SIZE ? 0xFF :
+                       pages[IAP_Test_Address(address)];
         if (corrupt_commit_read && (address == SECOND_PAGE + COMMIT_OFFSET ||
             address == BF006_CONFIG_SLOT_B + COMMIT_OFFSET) &&
             *destination == 0xA5) {
@@ -107,7 +175,7 @@ void EEPROM_write_n(u16 address, u8 *source, u16 length)
 {
     while (length--) {
         if (mutations++ < cut_at) {
-            pages[address] &= *source;
+            pages[IAP_Test_Address(address)] &= *source;
         }
         address++;
         source++;
@@ -124,7 +192,9 @@ void EEPROM_write_n(u16 address, u8 *source, u16 length)
 void EEPROM_SectorErase(u16 address)
 {
     if (mutations++ < cut_at) {
-        if (address >= IDENTITY_PAGE_A) {
+        if (address >= BF006_BOOT_SLOT_A) {
+            memset(&pages[IAP_Test_Address(address)], 0xFF, PAGE_SIZE);
+        } else if (address >= IDENTITY_PAGE_A) {
             memset(&pages[address], 0xFF, IDENTITY_SECTOR_SIZE);
         } else {
             memset(&pages[address], 0xFF, address >= LEGACY_PAGE_SIZE ? LEGACY_PAGE_SIZE : PAGE_SIZE);
@@ -328,6 +398,15 @@ void main(void) //20261114-4 add
     if (config.Sensor_Rang != 150 || sys.Sensor_Rang != 1500) {
         Test_Done();
     }
+
+    Test_Result = 14;
+    mutations = 0;
+    if (!Boot_Identity_Provision(BF006_BOOT_SLOT_A, BF006_BOOT_SLOT_B, 512, 100)) {
+        Test_Done();
+    }
+    Boot_Context_Init();
+    uart_init();
+    Read_Board_Context();
 
     Test_Result = 7;
     memset(pages, 0xFF, sizeof(pages));
