@@ -1055,6 +1055,11 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
                             controls[0].result = 0x31;
                             Control_Capture(&controls[0], revision, now);
                         }
+#if BF006_CONFIG_STORE_ENABLED
+                        if (action == 2 && controls[0].phase == 2 && controls[0].operation != 0x10) {
+                            Config_Abort_Commit();
+                        }
+#endif
                         sys.Pump_A_ON = action == 1;
                         entry->phase = ((sys.Pump_A_state != 0) == (action == 1)) ? 4 : 2;
                     }
@@ -1107,6 +1112,42 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
     return result;
 }
 #endif
+
+/******************************************************************************
+ * 函数名称       : Snapshot4G_Before_Save
+ * 功能描述       : 落标前复核执行身份、时效和现场资格。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+void Snapshot4G_Before_Save(void) //20261114-20 add
+{
+#if BF006_BOARD_CONTEXT
+    Control_Record xdata *entry;
+    u32 boot;
+    u32 revision;
+    u32 now;
+    u32 deadline;
+    u8 i;
+
+    entry = &controls[0];
+    if (!Config_At_Marker() || entry->phase != 2 ||
+        (entry->operation == 0x10 && entry->request[21] < 4)) {
+        return;
+    }
+    deadline = 0;
+    for (i = 16; i < 20; i++) {
+        deadline = (deadline << 8) | entry->request[i];
+    }
+    if (!Snapshot_Context(&boot, &revision, &now) || boot != control_boot ||
+        revision != entry->revision || now >= deadline ||
+        (entry->operation != 0x10 && (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL ||
+         sys.Pump_A_ON || sys.Pump_A_state)) ||
+        (sys.Setting_Flag == 2 && sys.Setting_Index < 21)) {
+        Config_Abort_Commit();
+    }
+#endif
+}
 
 /******************************************************************************
  * 函数名称       : Snapshot4G_Process

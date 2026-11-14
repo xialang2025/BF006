@@ -148,7 +148,7 @@ static void Read_Board_Context(void) //20261114-15 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state) //20261114-19 change
+static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state, u8 result) //20261114-20 change
 {
     u8 frame[55];
     u8 i;
@@ -212,7 +212,7 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state)
     Snapshot4G_Process();
     for (i = 0; i < 50; i++) {
         value = S4BUF;
-        if ((i == 8 && value) || (i == 10 && value != 37) ||
+        if ((i == 8 && value != result) || (i == 10 && value != 37) ||
             (i == 31 && value != phase) || (i == 34 && value != expected_state)) {
             Test_Done();
         }
@@ -491,14 +491,14 @@ void main(void) //20261114-4 add
     Test_Result = 15;
     config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
     mutations = 0;
-    Board_Mode_Request(0x10, 1, 2, 1);
+    Board_Mode_Request(0x10, 1, 2, 1, 0);
     if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
         Test_Done();
     }
     for (loop = 0; loop < 300; loop++) {
         Config_Background();
     }
-    Board_Mode_Request(0x13, 1, 3, 6);
+    Board_Mode_Request(0x13, 1, 3, 6, 0);
     sys_init();
     Par_Init();
     if (config.Hand_Auto_timer_Flag != RUNMODE_AUTO) {
@@ -509,14 +509,14 @@ void main(void) //20261114-4 add
     config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
     config.Auto_Mode = SENSORTYPE_WATER4_20MA;
     mutations = 0;
-    Board_Mode_Request(0x11, 2, 2, 1);
+    Board_Mode_Request(0x11, 2, 2, 1, 0);
     if (config.Sensor_Rang != 150) {
         Test_Done();
     }
     for (loop = 0; loop < 300; loop++) {
         Config_Background();
     }
-    Board_Mode_Request(0x13, 2, 3, 1);
+    Board_Mode_Request(0x13, 2, 3, 1, 0);
     sys_init();
     Par_Init();
     if (config.Sensor_Rang != 200 || sys.Sensor_Rang != 2000) {
@@ -525,14 +525,14 @@ void main(void) //20261114-4 add
 
     Test_Result = 17;
     mutations = 0;
-    Board_Mode_Request(0x12, 3, 2, 1);
+    Board_Mode_Request(0x12, 3, 2, 1, 0);
     if (config.Sensor_Mode != CTROLTYPE_DRAIN || config.Sensor_ON1 != 50 || config.Sensor_STOP != 10) {
         Test_Done();
     }
     for (loop = 0; loop < 300; loop++) {
         Config_Background();
     }
-    Board_Mode_Request(0x13, 3, 3, 1);
+    Board_Mode_Request(0x13, 3, 3, 1, 0);
     sys_init();
     Par_Init();
     if (config.Sensor_Mode != CTROLTYPE_PUMP || config.Sensor_ON1 != 20 || config.Sensor_STOP != 90 ||
@@ -542,19 +542,34 @@ void main(void) //20261114-4 add
 
     Test_Result = 18;
     mutations = 0;
-    Board_Mode_Request(0x12, 4, 2, 1);
+    Board_Mode_Request(0x12, 4, 2, 1, 0);
     if (config.UVP_Value || config.OVP_Value || config.Set_OVERLOAD_Current1) {
         Test_Done();
     }
     for (loop = 0; loop < 300; loop++) {
         Config_Background();
     }
-    Board_Mode_Request(0x13, 4, 3, 1);
+    Board_Mode_Request(0x13, 4, 3, 1, 0);
     sys_init();
     Par_Init();
     if (config.UVP_Value != (VoltageValue == Vol_380 ? 320 : 150) ||
         config.OVP_Value != (VoltageValue == Vol_380 ? 480 : 260) ||
         config.Set_OVERLOAD_Current1 != 100 || config.Set_STANDBY_Current1 || config.Sensor_Rang != 200) {
+        Test_Done();
+    }
+
+    Test_Result = 19;
+    mutations = 0;
+    Board_Mode_Request(0x10, 5, 2, 1, 0);
+    for (loop = 0; loop < 300; loop++) {
+        Boot_Context_Tick();
+        Snapshot4G_Before_Save();
+        Config_Background();
+    }
+    Board_Mode_Request(0x13, 5, 5, 1, 0x28);
+    sys_init();
+    Par_Init();
+    if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
         Test_Done();
     }
 

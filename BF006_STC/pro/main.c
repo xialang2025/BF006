@@ -154,6 +154,7 @@ void main(void)
         Snapshot4G_Process(); //20261114-2 add 完成本轮运行及显示更新后才取快照
 #endif
 #if BF006_CONFIG_STORE_ENABLED
+        Snapshot4G_Before_Save(); //20261114-20 add
         Config_Background(); //20261114-4 add 在逐字节擦写之间继续处理通信及保护
 #endif
     }

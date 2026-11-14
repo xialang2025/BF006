@@ -28,6 +28,7 @@ u8 Config_Store_Open(u16 first, u16 second, u8 *payload);
 u8 Config_Store_Begin(const u8 *payload, const Config_Byte_Edit *edits, u8 count);
 u8 Config_Store_Step(void);
 void Config_Store_Cancel(void);
+u8 Config_Store_At_Marker(void);
 
 #define CONFIG_PANEL_EDITS 16
 #define CONFIG_OFFSET(member) ((u8)((u8 *)&config.member - (u8 *)&config))
@@ -41,6 +42,8 @@ void Config_Panel_Encode(u8 index, u8 offset, u16 value, u8 width);
 u8 Config_Submit(u8 count);
 u8 Config_Commit_Status(void);
 u8 Config_Stage_Mode(u8 mode);
+void Config_Abort_Commit(void);
+u8 Config_At_Marker(void);
 void Config_Observe_Changes(void);
 #endif
 
