@@ -148,9 +148,9 @@ static void Read_Board_Context(void) //20261114-15 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state) //20261114-17 change
+static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state) //20261114-18 change
 {
-    u8 frame[38];
+    u8 frame[55];
     u8 i;
     u8 length;
     u8 value;
@@ -163,7 +163,7 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state)
     frame[3] = 6;
     frame[4] = 1;
     frame[5] = operation;
-    frame[9] = operation == 0x10 ? 22 : (operation == 0x11 ? 26 : 13);
+    frame[9] = operation == 0x10 ? 22 : (operation == 0x11 ? 26 : (operation == 0x12 ? 38 : 13));
     frame[17] = id;
     frame[21] = 101;
     if (operation != 0x13) {
@@ -171,6 +171,16 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state)
         frame[29] = 250;
         frame[31] = operation == 0x10 ? 5 : 17;
         frame[35] = 200;
+        if (operation == 0x12) {
+            frame[31] = 1;
+            frame[32] = 3;
+            frame[33] = 16;
+            frame[35] = 0;
+            frame[38] = 18;
+            frame[42] = 20;
+            frame[43] = 19;
+            frame[47] = 90;
+        }
     }
     length = frame[9] + 12;
     crc = BF006_Modbus_CRC(frame, length - 2);
@@ -496,6 +506,23 @@ void main(void) //20261114-4 add
     sys_init();
     Par_Init();
     if (config.Sensor_Rang != 200 || sys.Sensor_Rang != 2000) {
+        Test_Done();
+    }
+
+    Test_Result = 17;
+    mutations = 0;
+    Board_Mode_Request(0x12, 3, 2, 1);
+    if (config.Sensor_Mode != CTROLTYPE_DRAIN || config.Sensor_ON1 != 50 || config.Sensor_STOP != 10) {
+        Test_Done();
+    }
+    for (loop = 0; loop < 300; loop++) {
+        Config_Background();
+    }
+    Board_Mode_Request(0x13, 3, 3, 1);
+    sys_init();
+    Par_Init();
+    if (config.Sensor_Mode != CTROLTYPE_PUMP || config.Sensor_ON1 != 20 || config.Sensor_STOP != 90 ||
+        config.Sensor_Rang != 200) {
         Test_Done();
     }
 

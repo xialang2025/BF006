@@ -492,7 +492,8 @@ static u8 Snapshot_Check_Protection_Group(u8 *change) //20261114-10 add
 }
 
 typedef struct {
-    u8 request[26];
+    u8 request[43];
+    u8 request_length;
     u8 operation;
     u8 field;
     u8 range_valid;
@@ -543,6 +544,26 @@ static u8 Snapshot_Submit_Setting(u8 field, u16 value) //20261114-17 add
 }
 #endif
 
+#if BF006_CONFIG_STORE_ENABLED
+/******************************************************************************
+ * 函数名称       : Snapshot_Submit_Water_Group
+ * 功能描述       : 一次提交供排水和两个启停位。
+ * 输入参数       : None
+ * 返回值         : 保存状态
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Submit_Water_Group(void) //20261114-18 add
+{
+    if (!Config_Panel_Available()) {
+        return CONFIG_STORE_LOCKED;
+    }
+    Config_Panel_Encode(0, CONFIG_OFFSET(Sensor_Mode), (u16)Snapshot_Get32(34), 1);
+    Config_Panel_Encode(1, CONFIG_OFFSET(Sensor_ON1), (u16)Snapshot_Get32(39), 2);
+    Config_Panel_Encode(3, CONFIG_OFFSET(Sensor_STOP), (u16)Snapshot_Get32(44), 2);
+    return Config_Submit(5);
+}
+#endif
+
 /******************************************************************************
  * 函数名称       : Snapshot_Setting_Reply
  * 功能描述       : 验证单写并返回实际值，存储尚未接入时拒绝改变配置。
@@ -559,6 +580,8 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
     u8 phase;
     u8 group;
     u8 changed;
+    u8 operation;
+    u8 request_length;
     u32 boot;
     u32 revision;
     u32 now;
@@ -575,7 +598,10 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
     if (!Snapshot_Context(&boot, &revision, &now)) {
         return SNAPSHOT_CONTEXT_UNAVAILABLE;
     }
-    group = uart4_frame[5] == 0x12;
+    operation = uart4_frame[5];
+    request_length = uart4_frame[9];
+    group = operation == 0x12;
+    changed = 0;
     field = group ? 0 : uart4_frame[31];
     mode = uart4_frame[30];
     deadline = Snapshot_Get32(26);
@@ -591,14 +617,15 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
         }
     }
 #if BF006_CONFIG_STORE_ENABLED
-    if (!group && mode <= 1 && Snapshot_Get32(18) == boot &&
+    if (mode <= 1 && Snapshot_Get32(18) == boot &&
         (Snapshot_Get32(10) || Snapshot_Get32(14))) {
         Control_Use_Boot(boot);
         Control_Observe(&controls[0], revision, now);
         Control_Observe(&controls[1], revision, now);
         entry = &controls[0];
         if (entry->phase && !memcmp(entry->request, &uart4_frame[10], 8) &&
-            entry->operation == 0x11 && !memcmp(entry->request, &uart4_frame[10], 26)) {
+            entry->operation == operation && entry->request_length == request_length &&
+            !memcmp(entry->request, &uart4_frame[10], request_length)) {
             return Control_Render(entry, boot, mode, 1, length);
         }
     }
@@ -653,7 +680,7 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
         }
     }
 #if BF006_CONFIG_STORE_ENABLED
-    if (!group && mode <= 1 && Snapshot_Get32(18) == boot &&
+    if (mode <= 1 && Snapshot_Get32(18) == boot &&
         (Snapshot_Get32(10) || Snapshot_Get32(14))) {
         entry = &controls[0];
         if ((entry->phase && !memcmp(entry->request, &uart4_frame[10], 8)) ||
@@ -669,8 +696,9 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
                 result = 6;
                 phase = 1;
             } else {
-                if (result == 0x30 && (flags & 12) == 12) {
-                    submitted = Snapshot_Submit_Setting(field, (u16)value);
+                if (result == 0x30 && ((!group && (flags & 12) == 12) ||
+                    (group && uart4_frame[31] == 1 && changed))) {
+                    submitted = group ? Snapshot_Submit_Water_Group() : Snapshot_Submit_Setting(field, (u16)value);
                     if (submitted == CONFIG_STORE_BUSY) {
                         result = 0;
                         phase = 2;
@@ -678,8 +706,9 @@ static u8 Snapshot_Setting_Reply(u8 *length) //20261114-10 change
                         result = submitted == CONFIG_STORE_LOCKED ? 6 : 0x28;
                     }
                 }
-                memcpy(entry->request, &uart4_frame[10], 26);
-                entry->operation = 0x11;
+                memcpy(entry->request, &uart4_frame[10], request_length);
+                entry->operation = operation;
+                entry->request_length = request_length;
                 entry->accepted = now;
                 entry->result = result;
                 entry->phase = phase;
@@ -980,6 +1009,7 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
             } else {
                 memcpy(entry->request, &uart4_frame[10], 22);
                 entry->operation = 0x10;
+                entry->request_length = 22;
                 entry->field = 0;
                 entry->range_valid = 0;
                 entry->phase = 1;
