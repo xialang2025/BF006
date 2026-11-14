@@ -106,7 +106,6 @@ static void Read_Board_Context(void) //20261114-15 add
     u8 index;
     u8 value;
     u16 crc;
-
     memset(frame, 0, sizeof(frame));
     frame[0] = config.Dev_Address;
     frame[1] = 0x43;
@@ -148,14 +147,20 @@ static void Read_Board_Context(void) //20261114-15 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state, u8 result) //20261114-20 change
+static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state, u8 result) //20261114-22 change
 {
     u8 frame[55];
     u8 i;
     u8 length;
     u8 value;
     u16 crc;
+    u32 boot;
+    u32 revision;
+    u32 now;
 
+    if (!Boot_Context_Read(&boot, &revision, &now)) {
+        Test_Done();
+    }
     memset(frame, 0, sizeof(frame));
     frame[0] = config.Dev_Address;
     frame[1] = 0x43;
@@ -167,10 +172,16 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state,
     frame[17] = id;
     frame[21] = 101;
     if (operation != 0x13) {
-        frame[25] = 1;
-        frame[28] = id == 6 ? 7 : 0;
+        frame[22] = (u8)(revision >> 24);
+        frame[23] = (u8)(revision >> 16);
+        frame[24] = (u8)(revision >> 8);
+        frame[25] = (u8)revision;
+        frame[28] = id >= 6 ? 7 : 0;
         frame[29] = 250;
         frame[31] = operation == 0x10 ? 5 : 17;
+        if (id == 8) {
+            frame[31] = 2;
+        }
         frame[35] = 200;
         if (operation == 0x12) {
             frame[31] = 1;
@@ -181,6 +192,11 @@ static void Board_Mode_Request(u8 operation, u8 id, u8 phase, u8 expected_state,
             frame[42] = 20;
             frame[43] = 19;
             frame[47] = 90;
+            if (id == 7) {
+                frame[37] = CTROLTYPE_DRAIN;
+                frame[42] = 50;
+                frame[47] = 10;
+            }
             if (id == 4) {
                 frame[9] = 43;
                 frame[31] = 2;
@@ -590,6 +606,27 @@ void main(void) //20261114-4 add
         Test_Done();
     }
     Board_Mode_Request(0x13, 6, 6, 1, 0x28);
+
+    Test_Result = 21;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    mutations = 0;
+    Board_Mode_Request(0x12, 7, 2, 1, 0);
+    Config_Background();
+    Test_Result = 22;
+    Board_Mode_Request(0x10, 8, 4, 1, 0);
+    for (loop = 0; loop < 300; loop++) {
+        Config_Background();
+        Snapshot4G_Background();
+    }
+    Test_Result = 23;
+    Board_Mode_Request(0x13, 7, 5, 1, 0x28);
+    Test_Result = 24;
+    Board_Mode_Request(0x13, 8, 4, 1, 0);
+    sys_init();
+    Par_Init();
+    if (config.Sensor_Mode != CTROLTYPE_PUMP || config.Sensor_ON1 != 20 || config.Sensor_STOP != 90) {
+        Test_Done();
+    }
 
     Test_Result = 7;
     memset(pages, 0xFF, sizeof(pages));

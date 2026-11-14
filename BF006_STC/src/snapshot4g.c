@@ -973,7 +973,7 @@ static u8 Control_Render(Control_Record xdata *entry, u32 boot, u8 mode, u8 hist
  * 返回值         : 协议结果码
  * 日期            : 2026.11.14
  ******************************************************************************/
-static u8 Control_Reply(u8 *length) //20261114-16 change
+static u8 Control_Reply(u8 *length) //20261114-22 change
 {
     Control_Record xdata *entry;
     u8 i;
@@ -1064,13 +1064,16 @@ static u8 Control_Reply(u8 *length) //20261114-16 change
                     } else if (action == 1 && (sys.Fault_A_Flag || sys.Fault_Error || config.Lock1)) {
                         entry->result = 0x22;
                     } else {
-                        if (action == 2 && controls[0].phase == 2 && controls[0].request[21] == 1) {
+                        if (action == 2 && controls[0].phase == 2 &&
+                            controls[0].operation == 0x10 && controls[0].request[21] == 1) {
                             controls[0].phase = 5;
                             controls[0].result = 0x31;
                             Control_Capture(&controls[0], revision, now);
                         }
 #if BF006_CONFIG_STORE_ENABLED
-                        if (action == 2 && controls[0].phase == 2 && controls[0].operation != 0x10) {
+                        if (action == 2 && controls[0].phase == 2 &&
+                            (controls[0].operation != 0x10 || controls[0].request[21] >= 4)) {
+                            // 停泵优先取消尚未写入提交标记的普通设置。
                             Config_Abort_Commit();
                         }
 #endif
