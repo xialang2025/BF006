@@ -3,7 +3,7 @@
 #include "Modbus_New.h"
 
 volatile u8 xdata Test_Result _at_ 0x0BFE;
-static u8 xdata frame[34];
+static u8 xdata frame[55];
 static u8 xdata reply[127];
 static u8 xdata baseline[77];
 static u32 simulated_time = 60000;
@@ -110,7 +110,7 @@ void main(void) //20261114-6 add
     config.Dev_Address = 1;
     config.Sensor_Rang = 9999;
     config.Sensor_ON1 = 654;
-    config.Sensor_STOP = 12345;
+    config.Sensor_STOP = 123;
     config.Sensor_Mode = CTROLTYPE_DRAIN;
     config.Auto_Mode = SENSORTYPE_PRESS0_5V;
     sys.Auto_Mode = config.Auto_Mode;
@@ -258,6 +258,31 @@ void main(void) //20261114-6 add
     frame[22] = 0;
     Exchange(25, 50);
     if (reply[8] != 0x31 || reply[31] != 5 || !(reply[32] & 32)) {
+        Test_Done();
+    }
+
+    Test_Result = 38;
+    frame[5] = 0x11;
+    frame[9] = 26;
+    memset(&frame[10], 0, 22);
+    frame[17] = 4;
+    frame[21] = 1;
+    frame[25] = 7;
+    frame[28] = 0xFD;
+    frame[29] = 0xE8;
+    frame[31] = 17;
+    frame[33] = 1;
+    Exchange(38, 50);
+    if (reply[8] != 0x2A || config.Sensor_Rang != 9999) {
+        Test_Done();
+    }
+    Test_Result = 39;
+    frame[32] = 0;
+    frame[33] = 0;
+    frame[34] = 0x27;
+    frame[35] = 0x0F;
+    Exchange(38, 50);
+    if (reply[8] || reply[31] != 4 || reply[35] != 17) {
         Test_Done();
     }
     Test_Result = 0;

@@ -3,6 +3,7 @@
 #include "Modbus_New.h"
 #include "Display.h"
 #include "HT1622.h"
+#include "user.h"
 
 #if (Model_OUT == Model_1C1)
 #define SNAPSHOT_FUNCTION 0x43
@@ -179,6 +180,7 @@ static void Snapshot_Write_Data(u8 base) //20261114-6 change
 #define SNAPSHOT_CONTEXT_DATA 48
 
 extern u8 Snapshot_Test_Context(u32 *boot, u32 *revision, u32 *uptime);
+static u32 Snapshot_Get32(u8 offset);
 
 /******************************************************************************
  * 函数名称       : Snapshot_Read_Field
@@ -216,6 +218,183 @@ static u8 Snapshot_Read_Field(u8 field, u32 *actual) //20261114-6 add
         *actual = (*actual << 8) | uart4_frame[SNAPSHOT_CONTEXT_DATA + offset++];
     }
     return 0;
+}
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Check_Setting
+ * 功能描述       : 核对单写字段、原宽度和当前允许范围。
+ * 输入参数       : field 字段号，value 请求值，minimum 和 maximum 可用区间
+ * 返回值         : 协议拒绝码或零
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Check_Setting(u8 field, u32 value, u32 *minimum, u32 *maximum) //20261114-8 add
+{
+    u8 continuous;
+
+    continuous = config.Auto_Mode >= SENSORTYPE_WATER4_20MA && config.Auto_Mode <= SENSORTYPE_PRESS0_5V;
+    *minimum = 0;
+    *maximum = 0;
+    if (field < 16 || field > 26 || field == 20) {
+        return 0x25;
+    }
+    if (value > 0xFFFFUL || (field == 16 && value > 1)) {
+        return 0x2A;
+    }
+    switch (field) {
+    case 16:
+        if (config.Auto_Mode > SENSORTYPE_PRESS) {
+            return 0x24;
+        }
+        *maximum = 1;
+        break;
+    case 17:
+        if (!continuous) {
+            return 0x20;
+        }
+        if ((config.Sensor_Mode == CTROLTYPE_PUMP && config.Sensor_ON1 >= config.Sensor_STOP) ||
+            (config.Sensor_Mode == CTROLTYPE_DRAIN && config.Sensor_ON1 <= config.Sensor_STOP) ||
+            config.Sensor_Mode > CTROLTYPE_DRAIN) {
+            return 0x24;
+        }
+        *minimum = config.Sensor_ON1 > config.Sensor_STOP ? config.Sensor_ON1 : config.Sensor_STOP;
+        if (*minimum == 0) {
+            *minimum = 1;
+        }
+        if (value < config.Sensor_Rang && *minimum <= config.Sensor_overFlow) {
+            *minimum = (u32)config.Sensor_overFlow + 1;
+        }
+        *maximum = 9999;
+        break;
+    case 18:
+    case 19:
+        if (!continuous || config.Sensor_Mode > CTROLTYPE_DRAIN) {
+            return 0x20;
+        }
+        *maximum = config.Sensor_Rang < 9999 ? config.Sensor_Rang : 9999;
+        if ((field == 18) == (config.Sensor_Mode == CTROLTYPE_PUMP)) {
+            if (!(field == 18 ? config.Sensor_STOP : config.Sensor_ON1)) {
+                return 0x24;
+            }
+            if (*maximum >= (field == 18 ? config.Sensor_STOP : config.Sensor_ON1)) {
+                *maximum = (field == 18 ? config.Sensor_STOP : config.Sensor_ON1) - 1;
+            }
+        } else {
+            *minimum = (u32)(field == 18 ? config.Sensor_STOP : config.Sensor_ON1) + 1;
+        }
+        break;
+    case 21:
+    case 22:
+        *minimum = 85;
+        *maximum = (VoltageValue == Vol_380) ? 480 : 280;
+        if (field == 21 && *maximum >= config.OVP_Value) {
+            if (!config.OVP_Value) {
+                return 0x24;
+            }
+            *maximum = config.OVP_Value - 1;
+        }
+        if (field == 22 && *minimum <= config.UVP_Value) {
+            *minimum = (u32)config.UVP_Value + 1;
+        }
+        break;
+    case 23:
+    case 24:
+        *maximum = Limit_Current < 800 ? Limit_Current : 800;
+        if (field == 23) {
+            *minimum = (u32)config.Set_STANDBY_Current1 + 1;
+        } else if (*maximum >= config.Set_OVERLOAD_Current1) {
+            *maximum = config.Set_OVERLOAD_Current1 ? config.Set_OVERLOAD_Current1 - 1 : 0;
+        }
+        break;
+    case 25:
+    case 26:
+        return 0x30; // 循环分钟上限等待实体核验
+    }
+    if (*minimum > *maximum || value < *minimum || value > *maximum) {
+        return 0x23;
+    }
+    return 0;
+}
+
+/******************************************************************************
+ * 函数名称       : Snapshot_Setting_Reply
+ * 功能描述       : 验证单写并返回实际值，存储尚未接入时拒绝改变配置。
+ * 输入参数       : length 返回的数据区长度
+ * 返回值         : 协议结果码
+ * 日期            : 2026.11.14
+ ******************************************************************************/
+static u8 Snapshot_Setting_Reply(u8 *length) //20261114-8 add
+{
+    u8 field;
+    u8 mode;
+    u8 result;
+    u8 flags;
+    u8 phase;
+    u32 boot;
+    u32 revision;
+    u32 now;
+    u32 deadline;
+    u32 value;
+    u32 minimum;
+    u32 maximum;
+    u32 actual;
+
+    if (!Snapshot_Test_Context(&boot, &revision, &now)) {
+        return SNAPSHOT_CONTEXT_UNAVAILABLE;
+    }
+    field = uart4_frame[31];
+    mode = uart4_frame[30];
+    deadline = Snapshot_Get32(26);
+    value = Snapshot_Get32(32);
+    flags = 1;
+    phase = 1;
+    minimum = maximum = 0;
+    Snapshot_Write_Data(SNAPSHOT_CONTEXT_DATA);
+    if (!Snapshot_Read_Field(field, &actual)) {
+        flags |= 2;
+    }
+    if (mode > 1) {
+        result = 0x33;
+    } else if (Snapshot_Get32(18) != boot) {
+        result = 0x27;
+    } else if (!Snapshot_Get32(10) && !Snapshot_Get32(14)) {
+        result = 0x2A;
+    } else if (deadline <= now || deadline - now > 10000UL) {
+        result = 0x2E;
+    } else if (Snapshot_Get32(22) != revision) {
+        result = 0x26;
+    } else if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
+        result = 0x20;
+    } else if (sys.Pump_A_state || sys.Pump_A_ON) {
+        result = 0x21;
+    } else {
+        result = Snapshot_Check_Setting(field, value, &minimum, &maximum);
+        if ((!result || result == 0x23) && minimum <= maximum) {
+            flags |= 12;
+        }
+        if (!result) {
+            if (value == actual) {
+                phase = 4;
+            } else {
+                result = 0x30;
+            }
+        }
+    }
+    memmove(&uart4_frame[11], &uart4_frame[10], 8);
+    memset(&uart4_frame[19], 0, 29);
+    Snapshot_Put32(19, boot);
+    Snapshot_Put32(23, revision);
+    Snapshot_Put32(27, now);
+    uart4_frame[31] = phase;
+    uart4_frame[32] = flags | (mode == 1 ? 16 : 0);
+    uart4_frame[34] = uart4_frame[SNAPSHOT_CONTEXT_DATA + 17];
+    uart4_frame[35] = field;
+    Snapshot_Put32(36, actual);
+    if (flags & 12) {
+        Snapshot_Put32(40, minimum);
+        Snapshot_Put32(44, maximum);
+    }
+    *length = SNAPSHOT_CONTEXT_SIZE + (mode == 1 ? SNAPSHOT_DATA_SIZE : 0);
+    return result;
 }
 
 /******************************************************************************
@@ -489,7 +668,7 @@ static u8 Control_Reply(u8 *length) //20261114-7 add
  * 返回值         : None
  * 日期            : 2026.11.14
  ******************************************************************************/
-void Snapshot4G_Process(void) //20261114-7 change
+void Snapshot4G_Process(void) //20261114-8 change
 {
     u8 length;
     u8 result;
@@ -533,6 +712,12 @@ void Snapshot4G_Process(void) //20261114-7 change
 #endif
         }
 #ifdef BF006_CONTEXT_SIMULATION
+    } else if (uart4_frame[5] == 0x11) {
+        if (length != 38 || uart4_frame[8] || uart4_frame[9] != 26) {
+            result = 3;
+        } else {
+            result = Snapshot_Setting_Reply(&data_length);
+        }
     } else if (uart4_frame[5] == 0x10 || uart4_frame[5] == 0x13) {
         if (uart4_frame[8] || (uart4_frame[5] == 0x10 && (length != 34 || uart4_frame[9] != 22)) ||
             (uart4_frame[5] == 0x13 && (length != 25 || uart4_frame[9] != 13))) {
