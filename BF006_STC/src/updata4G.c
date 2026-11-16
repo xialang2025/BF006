@@ -966,7 +966,7 @@ void Analyse_4G(void)
 #define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
-#define BF4G_CAPABILITIES 0
+#define BF4G_CAPABILITIES 0x0001 //20261116-1 change 已验证的参数读取能力。
 
 /******************************************************************************
  * 函数名称       : bf4g_crc
@@ -1018,6 +1018,9 @@ static u16 bf4g_model_word(void) //20261116-0 add
 {
     u8 spec = 0x93;
 
+    if (!config_loaded) {
+        return 0;
+    }
     switch (config.Set_OVERLOAD_Current1) {
     case V1_Set_Current:
         spec = 0x90;
@@ -1056,17 +1059,211 @@ static void bf4g_device_info(u8 xdata *out) //20261116-0 add
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_param_value
+ * 功能描述       : 读取参数号对应的原配置值。
+ * 输入参数       : number，已经校验的参数号。
+ * 返回值         : 原始值。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_param_value(u8 number) //20261116-1 add
+{
+    switch (number) {
+    case 0:
+        return config.OVP_Value;
+    case 1:
+        return config.UVP_Value;
+    case 2:
+        return config.Set_STANDBY_Current1;
+    case 3:
+        return config.Set_OVERLOAD_Current1;
+    case 4:
+        return config.Set_STANDBY_Current2;
+    case 5:
+        return config.Set_OVERLOAD_Current2;
+    case 6:
+        return config.AUTO_Timing_Run;
+    case 7:
+        return config.AUTO_Timing_Stop;
+    case 8:
+        return config.Timer_Standby_Restart;
+    case 9:
+        return config.Timer_Unload_Restart;
+    case 10:
+        return config.AUTO_FANGXIU;
+    case 11:
+        return config.Dev_Address;
+    case 12:
+        return config.Pump_AB_Mode;
+    case 13:
+        return config.Sensor_Mode;
+    case 14:
+        return config.Sensor_Rang;
+    case 15:
+        return config.Sensor_STOP;
+    case 16:
+        return config.Sensor_ON1;
+    case 17:
+        return config.Sensor_ON2;
+    case 18:
+        return config.Auto_Mode;
+    case 19:
+        return config.fault_mask;
+    case 20:
+        return config.Sensor_overFlow;
+    case 21:
+        return config.Total_Run_Hour;
+    case 22:
+        return config.Total_Power_Day;
+    }
+    return 0;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_param_applicable
+ * 功能描述       : 判断参数是否适用于编译机型。
+ * 输入参数       : number，参数号。
+ * 返回值         : 适用时为一。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static bit bf4g_param_applicable(u8 number) //20261116-1 add
+{
+    return Model_OUT == Model_1C2 ||
+           (number != 4 && number != 5 && number != 12 && number != 17);
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_param_minimum
+ * 功能描述       : 查询参数下限。
+ * 输入参数       : number，已经校验的参数号。
+ * 返回值         : 参数下限。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_param_minimum(u8 number) //20261116-1 add
+{
+    if (number <= 1) {
+        return 85;
+    }
+    return number == 11 ? 1 : 0;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_param_maximum
+ * 功能描述       : 查询参数上限，连续量阈值使用当前量程。
+ * 输入参数       : number，已经校验的参数号。
+ * 返回值         : 参数上限。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_param_maximum(u8 number) //20261116-1 add
+{
+    static const u16 code limits[23] = {
+        0, 0, 900, 900, 900, 900, 9999, 9999, 9999, 9999, 999, 254,
+        2, 1, 9999, 0, 0, 0, 4, 4, 0, 9999, 9999
+    };
+
+    if (number <= 1) {
+        return VoltageValue == Vol_380 ? 480 : 280;
+    }
+    if (number == 15 || number == 16 || number == 17 || number == 20) {
+        return config.Sensor_Rang;     // 零量程时只有零阈值合法。
+    }
+    return limits[number];
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_param_read
+ * 功能描述       : 根据装载、机型及数值范围生成单项质量和原值。
+ * 输入参数       : number，已经校验的参数号；quality，质量输出位置。
+ * 返回值         : 原值，未装载时为零。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_param_read(u8 number, u8 *quality) //20261116-1 add
+{
+    u16 value;
+
+    if (!config_loaded) {
+        *quality = 2;
+        return 0;
+    }
+    value = bf4g_param_value(number);
+    if (!bf4g_param_applicable(number)) {
+        *quality = 1;                 // 保留不适用参数原值，优先于异常值判定。
+    } else if (value < bf4g_param_minimum(number) || value > bf4g_param_maximum(number)) {
+        *quality = 3;
+    } else {
+        *quality = 0;
+    }
+    return value;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_error
+ * 功能描述       : 在共享帧内填写统一错误应答数据。
+ * 输入参数       : out，应答数据位置；status，结果码；object，目标。
+ * 返回值         : 错误数据长度。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_error(u8 xdata *out, u8 status, u8 object) //20261116-1 add
+{
+    u8 i;
+
+    out[0] = status;
+    out[1] = object;
+    for (i = 2; i < 10; i++) {
+        out[i] = 0;                  // 无范围信息时两个边界均写零。
+    }
+    return 10;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_read_parameters
+ * 功能描述       : 校验区间并逐项写入参数质量和原值。
+ * 输入参数       : out，请求及应答数据位置；length，请求数据长度。
+ * 返回值         : 应答数据长度。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_read_parameters(u8 xdata *out, u8 length) //20261116-1 add
+{
+    u8 start;
+    u8 count;
+    u8 i;
+    u8 quality;
+    u16 value;
+
+    if (length != 2) {
+        return bf4g_error(out, 3, length ? out[0] : 0xff);
+    }
+    start = out[0];
+    count = out[1];
+    if (start >= 23) {
+        return bf4g_error(out, 4, start);
+    }
+    if (count == 0 || count > 16 || count > 23 - start) {
+        return bf4g_error(out, 3, start);
+    }
+
+    out[0] = 0;
+    out[1] = start;
+    out[2] = count;
+    for (i = 0; i < count; i++) {
+        value = bf4g_param_read(start + i, &quality);
+        out[3 + i * 3] = quality;
+        bf4g_put_u16(out + 4 + i * 3, value);
+    }
+    return 3 + count * 3;
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_reply
  * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
  * 输入参数       : frame，共享报文缓冲；length，实收字节数。
  * 返回值         : 应答字节数，静默丢弃为零。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-0 add
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-1 change
 {
-    u8 status;
+    u8 xdata *out;
     u8 data_length;
-    u8 i;
+    u8 object;
     u16 crc;
 
     if (length < BF4G_OVERHEAD || frame[1] != 0x43 ||
@@ -1075,32 +1272,33 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-0 add
         return 0;                         // 头或边界无法确认时静默丢弃。
     }
 
+    out = frame + BF4G_DATA;
     data_length = frame[8];
     if (frame[4] != BF4G_FMT) {
         if (data_length != length - BF4G_OVERHEAD) {
             return 0;                    // 异格式只应答能按公共头辨认的帧。
         }
-        status = 0x02;
+        data_length = bf4g_error(out, 2, 0xff);
     } else if (data_length != length - BF4G_OVERHEAD || (frame[6] | frame[7]) == 0) {
-        status = 0x03;
-    } else if (frame[5] != 0x01) {
-        status = 0x01;
-    } else if (data_length != 0) {
-        status = 0x03;
+        object = frame[5] == 2 && data_length && length > BF4G_OVERHEAD ? out[0] : 0xff;
+        data_length = bf4g_error(out, 3, object);
     } else {
-        status = 0;
-    }
-
-    if (status == 0) {
-        bf4g_device_info(frame + BF4G_DATA);
-        data_length = 16;
-    } else {
-        frame[BF4G_DATA] = status;
-        frame[BF4G_DATA + 1] = 0xff;
-        for (i = 2; i < 10; i++) {
-            frame[BF4G_DATA + i] = 0;     // 公共结构错误不携带范围上下限。
+        switch (frame[5]) {
+        case 1:
+            if (data_length != 0) {
+                data_length = bf4g_error(out, 3, 0xff);
+            } else {
+                bf4g_device_info(out);
+                data_length = 16;
+            }
+            break;
+        case 2:
+            data_length = bf4g_read_parameters(out, data_length);
+            break;
+        default:
+            data_length = bf4g_error(out, 1, 0xff);
+            break;
         }
-        data_length = 10;
     }
 
     frame[4] = BF4G_FMT;

@@ -88,5 +88,6 @@ void Total_Time_Second_Handle(u8 pump_running); //20260430-3 add
 void Total_Run_Time_Clear(void);                //20260501-1 add clear total run time
 void Total_Power_Time_Clear(void);              //20260501-1 add clear total power-on time
 extern config_t config;
+extern bit config_loaded; //20261116-1 add 供串口四判断参数是否已装载。
 
 #endif

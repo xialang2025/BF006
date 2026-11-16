@@ -8,6 +8,7 @@
 #define BAN_BEN 18 //20260430-3 change update version after adding total-time remainder fields
 
 config_t config;
+bit config_loaded; //20261116-1 add 参数读取及派生量初始化完成标志。
 
 extern u16 Limit_Current;
 
@@ -118,6 +119,7 @@ void Par_Init(void) //20260729-13 change
     }
 
     updatSysdata();
+    config_loaded = 1; //20261116-1 add 读入参数并更新运行配置后才宣告可用。
 }
 
 /******************************************************************************
