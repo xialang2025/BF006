@@ -969,7 +969,7 @@ void Analyse_4G(void)
 #define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
-#define BF4G_CAPABILITIES 0x0007 //20261116-6 change 已验证的参数、运行和历史读取能力。
+#define BF4G_CAPABILITIES 0x000f //20261116-7 change 已完成并验证四项读取及写入能力。
 
 /******************************************************************************
  * 函数名称       : bf4g_crc
@@ -1782,6 +1782,9 @@ static void bf4g_set_parameter(u8 number, u16 value) //20261116-6 change
     case 10:
         config.AUTO_FANGXIU = value;
         break;
+    case 11: //20261116-7 add 应答仍使用共享帧中的原请求地址。
+        config.Dev_Address = (u8)value;
+        break;
     case 12:
         config.Pump_AB_Mode = (u8)value;
         break;
@@ -1863,9 +1866,6 @@ static u8 bf4g_write_parameter(u8 xdata *out, u8 length) //20261116-4 add
     }
     if (!config_loaded) {
         return bf4g_error(out, 0x0e, number);
-    }
-    if (number == 11) { //20261116-6 change 改址由后续切片接入。
-        return bf4g_error(out, 1, number);
     }
 
     value = ((u16)out[1] << 8) | out[2];

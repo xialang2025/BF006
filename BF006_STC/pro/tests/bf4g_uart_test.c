@@ -235,7 +235,7 @@ static void check_info(u8 interfere) //20261116-0 add
     static const u8 expected[] = {
         0x01, 0x43, 0xbf, 0x06, 0x03, 0x81, 0x00, 0x01, 0x10,
         0x00, 0x00, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8,
-        TEST_VOLTS & 0xff, 0x00, 0x07, 0x61, 0x10, 0x09, 0x08
+        TEST_VOLTS & 0xff, 0x00, 0x0f, 0x61, 0x10, 0x09, 0x08
     };
 
     send_request(info_request, sizeof(info_request));
@@ -1085,6 +1085,95 @@ static void check_sensor_parameter_changes(void) //20261116-6 add
 }
 
 /******************************************************************************
+ * 函数名称       : query_address
+ * 功能描述       : 通过设备信息应答验证地址是否已生效。
+ * 输入参数       : address，请求地址；active，是否应有应答。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void query_address(u8 address, u8 active) //20261116-7 add
+{
+    u8 query[sizeof(info_request)];
+    u8 reply[27];
+
+    memcpy(query, info_request, sizeof(query));
+    query[0] = address;
+    fill_crc(query, sizeof(query));
+    send_request(query, sizeof(query));
+    CHECK(uart4_sending() == active);
+    if (active) {
+        collect_reply(reply, sizeof(reply), 0);
+        CHECK(reply[0] == address && reply[5] == 0x81 && crc(reply, sizeof(reply)) == 0);
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : check_address_change
+ * 功能描述       : 验证改址的旧地址应答、新地址生效及另一路改址交错。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_address_change(void) //20261116-7 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0x45, 0x67, 3, 11, 0, 2, 0, 0};
+    u8 reply[15];
+    u8 i;
+    u8 writes;
+
+    sys.save_flag = 0;
+    for (i = 0; i < 200; i++) {
+        save_pro();
+    }
+    writes = flash_writes;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    CHECK(config.Dev_Address == 2 && uart4_sending());
+    save_pro();
+    CHECK(flash_writes == writes);
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[0] == 1 && reply[5] == 0x90 && reply[6] == 0x45 && reply[7] == 0x67);
+    CHECK(reply[10] == 11 && reply[11] == 0 && reply[12] == 2);
+    CHECK(crc(reply, sizeof(reply)) == 0);
+    save_pro();
+    CHECK(flash_writes == writes + 1);
+    query_address(1, 0);
+    query_address(2, 1);
+
+    request[0] = 2;
+    request[11] = 0;
+    check_error_range(request, sizeof(request), 7, 11, 1, 254);
+    request[11] = 255;
+    check_error_range(request, sizeof(request), 7, 11, 1, 254);
+    request[10] = 1;
+    request[11] = 1;
+    check_error_range(request, sizeof(request), 7, 11, 1, 254);
+    CHECK(config.Dev_Address == 2 && sys.save_flag == 0);
+
+    request[10] = 0;
+    request[11] = 254;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    CHECK(config.Dev_Address == 254 && uart4_sending());
+    config.Dev_Address = 13;        // 模拟另一入口在串口四应答期间再次改址。
+    collect_reply(reply, sizeof(reply), 1);
+    CHECK(reply[0] == 2 && reply[11] == 0 && reply[12] == 254);
+    CHECK(crc(reply, sizeof(reply)) == 0);
+    timer_expire();
+    query_address(2, 0);
+    query_address(254, 0);
+    query_address(13, 1);
+
+    request[0] = 13;
+    request[11] = 1;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[0] == 13 && reply[12] == 1 && config.Dev_Address == 1);
+    query_address(1, 1);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1165,6 +1254,7 @@ int main(void) //20261116-0 add
     check_recovery_timers();
     check_sensor_width();
     check_sensor_parameter_changes();
+    check_address_change();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }
