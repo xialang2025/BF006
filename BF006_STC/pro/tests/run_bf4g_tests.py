@@ -44,7 +44,9 @@ def run_model(model, model_byte, phases, pumps, volts):
         (directory / "system.h").write_text(
             '#ifndef TEST_SYSTEM_H\n#define TEST_SYSTEM_H\n#include "config.h"\n'
             + definitions + '\nextern sys_t sys;\nextern bit Boot_Flag;\n'
-            'extern bit water_status_ready, sensor_sample_ready;\nvoid updatSysdata(void);\n'
+            'extern bit water_status_ready, sensor_sample_ready, sensor_alarm_pending;\n'
+            'extern u8 sensor_pending_tanks;\nvoid updatSysdata(void);\nvoid sensorOverFlowCheck(void);\n'
+            '#define SENSOR_PENDING_UPPER 1\n#define SENSOR_PENDING_LOWER 2\n'
             '#include "configPar.h"\n#endif\n', encoding="utf-8"
         )
         for name in ("uart4.h", "configPar.h", "Modbus_New.h", "Modbus.h", "ad.h", "Display.h", "HT1622.h", "user.h"):
@@ -57,7 +59,7 @@ def run_model(model, model_byte, phases, pumps, volts):
             (directory / name).write_text(source, encoding="utf-8")
         system_source = (SRC / "system.c").read_text(encoding="cp936")
         readiness = system_source[system_source.index("static volatile bit water_inputs_ready"):
-                                  system_source.index("bit sensor_sample_ready;") + 24]
+                                  system_source.index("bit sensor_alarm_pending;") + len("bit sensor_alarm_pending;")]
         sampling = system_source[system_source.index("void Water_Level(void)"):
                                  system_source.index("static bit cycle_pump_ready(void)")]
         scaling = system_source[system_source.index("void updatSysdata(void)"):

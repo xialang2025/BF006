@@ -16,7 +16,7 @@ sys_t sys;
 bit Boot_Flag;
 u8 LowWater_M, LowWater_H, HighWater_M, HighWater_H, PUMP_ADD, OverFlow_P, P34;
 u8 RELAY1, RELAY2, RELAY3;
-volatile bit voltage_sample_ready, current_sample_ready;
+volatile bit voltage_sample_ready, current_sample_ready, sensor_adc_fresh;
 u8 Dis7_Flash, Dis8_Flash;
 u8 LCD_WATER_Hlevel1, LCD_WATER_Hlevel2, LCD_WATER_Hlevel3,
    LCD_WATER_Hlevel4, LCD_WATER_Hlevel5, LCD_WATER_Hlevel6;
@@ -235,7 +235,7 @@ static void check_info(u8 interfere) //20261116-0 add
     static const u8 expected[] = {
         0x01, 0x43, 0xbf, 0x06, 0x03, 0x81, 0x00, 0x01, 0x10,
         0x00, 0x00, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8,
-        TEST_VOLTS & 0xff, 0x00, 0x05, 0x61, 0x10, 0x09, 0x08
+        TEST_VOLTS & 0xff, 0x00, 0x07, 0x61, 0x10, 0x09, 0x08
     };
 
     send_request(info_request, sizeof(info_request));
@@ -587,12 +587,12 @@ static void check_sensor_sample(void) //20261116-2 add
 
     config.Sensor_Mode = CTROLTYPE_PUMP;
     config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_WATER4_20MA;
-    current_sample_ready = 0;
+    sensor_adc_fresh = 0;
     sys.Cur_AD = 99;
     shuiwei_check();
     read_runtime(16, 1, zeros, unloaded);
 
-    current_sample_ready = 1;
+    sensor_adc_fresh = 1;
     shuiwei_check();
     read_runtime(16, 1, zeros, anomalous);
     sys.Cur_AD = 100;
@@ -975,6 +975,116 @@ static void check_recovery_timers(void) //20261116-5 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_sensor_width
+ * 功能描述       : 使用满量程模拟量验证源端换算及串口原值。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_sensor_width(void) //20261116-6 add
+{
+    static const u32 expected[] = {99990};
+    static const u8 valid[] = {0};
+
+    config.Sensor_Rang = 9999;
+    config_loaded = 1;
+    updatSysdata();
+    config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_PRESS0_5V;
+    sensor_adc_fresh = 1;
+    sys.Vol_AD = 1023;
+    shuiwei_check();
+    CHECK(sys.Sensor_Rang == 99990UL);
+    read_runtime(16, 1, expected, valid);
+    write_parameter_request(13, CTROLTYPE_DRAIN);
+    write_parameter_request(16, 9000);
+    config.Hand_Auto_timer_Flag = RUNMODE_AUTO;
+    sys.shang_DIR = 0;
+    sys.Pump_Flag = 0;
+    shuiwei_check();
+    RELAY_Auto_Control();
+    CHECK(sys.Sensor_ON1 == 90000UL && sys.Pump_Flag == 1);
+    sys.Pump_Flag = 0;
+}
+
+/******************************************************************************
+ * 函数名称       : check_sensor_parameter_changes
+ * 功能描述       : 验证量程、方向、类型和阈值修改后的数据恢复。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_sensor_parameter_changes(void) //20261116-6 add
+{
+    static const u32 zeros[] = {0, 0};
+    static const u8 pending[] = {2, 2};
+    static const u8 valid[] = {0};
+    static const u8 anomalies[] = {3};
+    static const u32 scaled[] = {10000};
+    static const u32 max_current[] = {10013};
+    static const u16 old_stop[] = {900};
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0, 11, 3, 17, 0, 1, 0, 0};
+
+    write_parameter_request(13, CTROLTYPE_PUMP);
+    shuiwei_check();
+    RELAY_Auto_Control();
+    water_status_ready = Boot_Flag = 1;
+    sys.xia_shuiwei = 0;
+    write_parameter_request(14, 1000);
+    read_runtime(16, 1, zeros, pending);
+    read_runtime(0x0f, 1, zeros, valid);
+    shuiwei_check();
+    RELAY_Auto_Control();
+    read_runtime(16, 1, scaled, valid);
+
+    write_parameter_request(15, 900);
+    write_parameter_request(16, 800);
+    if (TEST_PUMPS == 2) {
+        write_parameter_request(17, 700);
+    } else {
+        check_error(request, sizeof(request), 6, 17);
+    }
+    write_parameter_request(13, 1);
+    CHECK(config.Sensor_STOP == 900 && config.Sensor_ON1 == 800);
+    read_runtime(16, 1, scaled, valid);
+    read_runtime(21, 1, zeros, pending);
+    read_runtime(8, 1, zeros, pending);
+    shuiwei_check();
+    RELAY_Auto_Control();
+    CHECK(sys.SensorLever == 2);
+
+    write_parameter_request(18, SENSORTYPE_WATER4_20MA);
+    read_runtime(18, 1, zeros, pending);
+    sys.Auto_Mode = config.Auto_Mode;       // 模拟正常扫描开始时更新运行类型。
+    shuiwei_check();
+    RELAY_Auto_Control();
+    read_runtime(16, 1, zeros, pending);
+    CHECK(!sensor_adc_fresh);
+    sys.Cur_AD = 983;
+    sensor_adc_fresh = 1;                  // 模拟下一批采样发布。
+    shuiwei_check();
+    RELAY_Auto_Control();
+    read_runtime(16, 1, max_current, valid);
+
+    write_parameter_request(20, 1);
+    CHECK(sys.Sensor_OverFlow == 1);
+    sys.Cur_AD = 99;
+    shuiwei_check();
+    read_runtime(16, 1, zeros, anomalies);
+    write_parameter_request(20, 0);
+    read_runtime(17, 1, zeros, pending);
+    sys.Cur_AD = 100;
+    shuiwei_check();
+    RELAY_Auto_Control();
+    CHECK(!sensor_alarm_pending && sys.Sensor_OverFlow == 0);
+
+    write_parameter_request(14, 0);
+    read_parameters(15, 1, old_stop, anomalies);
+    request[9] = 15;
+    check_error_range(request, sizeof(request), 7, 15, 0, 0);
+    write_parameter_request(15, 0);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1053,6 +1163,8 @@ int main(void) //20261116-0 add
     check_cycle_counter();
     check_cycle_settings();
     check_recovery_timers();
+    check_sensor_width();
+    check_sensor_parameter_changes();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

@@ -969,7 +969,7 @@ void Analyse_4G(void)
 #define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
-#define BF4G_CAPABILITIES 0x0005 //20261116-3 change 已验证的参数和历史读取能力。
+#define BF4G_CAPABILITIES 0x0007 //20261116-6 change 已验证的参数、运行和历史读取能力。
 
 /******************************************************************************
  * 函数名称       : bf4g_crc
@@ -1327,9 +1327,9 @@ static u8 bf4g_first_fault(u32 faults) //20261116-2 add
  * 返回值         : 读数质量。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u8 bf4g_tank_quality(void) //20261116-2 add
+static u8 bf4g_tank_quality(void) //20261116-6 change
 {
-    if (!config_loaded || !water_status_ready) {
+    if (!config_loaded || !water_status_ready || sensor_pending_tanks) { //20261116-6 change
         return 2;
     }
     return (sys.shang_shuiwei > 2 || sys.xia_shuiwei > 2) ? 3 : 0;
@@ -1428,7 +1428,7 @@ static u8 bf4g_sensor_type_quality(u8 type) //20261116-2 add
  * 返回值         : 传感器字段值。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u32 bf4g_sensor_read(u8 number, u8 *quality) //20261116-2 add
+static u32 bf4g_sensor_read(u8 number, u8 *quality) //20261116-6 change
 {
     u8 type = sys.Auto_Mode;
     u8 flags;
@@ -1447,7 +1447,8 @@ static u32 bf4g_sensor_read(u8 number, u8 *quality) //20261116-2 add
         return type == SENSORTYPE_WATER4_20MA ? 1 : 2;
     }
     if (number == 0x11) {
-        if (!Boot_Flag || !water_status_ready ||
+        if (!Boot_Flag || !water_status_ready || sensor_pending_tanks ||
+            sensor_alarm_pending ||
             (type >= SENSORTYPE_WATER4_20MA && !sensor_sample_ready)) {
             *quality = 2;
             return 0;
@@ -1468,7 +1469,7 @@ static u32 bf4g_sensor_read(u8 number, u8 *quality) //20261116-2 add
         *quality = 1;
         return 0;
     }
-    if (!sensor_sample_ready || (number == 0x15 && !Boot_Flag)) {
+    if (!sensor_sample_ready || (number == 0x15 && (!Boot_Flag || sensor_pending_tanks))) {
         *quality = 2;
         return 0;
     }
@@ -1476,7 +1477,7 @@ static u32 bf4g_sensor_read(u8 number, u8 *quality) //20261116-2 add
         *quality = 3;                // 断线等异常分支清零的结果不是有效零。
         return 0;
     }
-    return number == 0x10 ? (u32)sys.SensorOut : (u32)sys.SensorLever;
+    return number == 0x10 ? sys.SensorOut : (u32)sys.SensorLever;
 }
 
 /******************************************************************************
@@ -1557,7 +1558,8 @@ static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
         return number == 0x09 ? bf4g_first_fault(faults) : bf4g_alarm(faults);
     case 0x0c:
     case 0x0d:
-        if (!config_loaded || !water_status_ready || !Boot_Flag) {
+        if (!config_loaded || !water_status_ready || !Boot_Flag ||
+            (sensor_pending_tanks & (number == 0x0c ? SENSOR_PENDING_UPPER : SENSOR_PENDING_LOWER))) {
             *quality = 2;
             return 0;
         }
@@ -1571,7 +1573,8 @@ static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
                (LCD_WATER_Llevel5 ? 16 : 0) | (LCD_WATER_Llevel6 ? 32 : 0);
     case 0x0e:
     case 0x0f:
-        if (!config_loaded || !water_status_ready) {
+        if (!config_loaded || !water_status_ready ||
+            (sensor_pending_tanks & (number == 0x0e ? SENSOR_PENDING_UPPER : SENSOR_PENDING_LOWER))) {
             *quality = 2;
             return 0;
         }
@@ -1721,13 +1724,29 @@ static u8 bf4g_read_history(u8 xdata *out, u8 length) //20261116-3 add
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_invalidate_sensor_level
+ * 功能描述       : 在连续类型下标记本次阈值改动所影响的水池。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_invalidate_sensor_level(void) //20261116-6 add
+{
+    if (config.Auto_Mode >= SENSORTYPE_WATER4_20MA &&
+        config.Auto_Mode <= SENSORTYPE_PRESS0_5V) {
+        sensor_pending_tanks |= config.Sensor_Mode == CTROLTYPE_PUMP ?
+                                SENSOR_PENDING_UPPER : SENSOR_PENDING_LOWER;
+    }
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_set_parameter
  * 功能描述       : 只给通过校验的单个参数赋值。
  * 输入参数       : number，参数号；value，已经校验的新值。
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-static void bf4g_set_parameter(u8 number, u16 value) //20261116-4 add
+static void bf4g_set_parameter(u8 number, u16 value) //20261116-6 change
 {
     switch (number) {
     case 0:
@@ -1766,8 +1785,50 @@ static void bf4g_set_parameter(u8 number, u16 value) //20261116-4 add
     case 12:
         config.Pump_AB_Mode = (u8)value;
         break;
+    case 13: //20261116-6 add 方向变化后两侧水池的旧状态均须重算。
+        config.Sensor_Mode = (u8)value;
+        sensor_pending_tanks = SENSOR_PENDING_UPPER | SENSOR_PENDING_LOWER;
+        break;
+    case 14:
+        config.Sensor_Rang = value;
+        sys.Sensor_Rang = (u32)value * 10UL;
+        sensor_sample_ready = 0;    // 原始采样仍可用于按新量程换算。
+        bf4g_invalidate_sensor_level();
+        break;
+    case 15:
+        config.Sensor_STOP = value;
+        sys.Sensor_STOP = (u32)value * 10UL;
+        bf4g_invalidate_sensor_level();
+        break;
+    case 16:
+        config.Sensor_ON1 = value;
+        sys.Sensor_ON1 = (u32)value * 10UL;
+        bf4g_invalidate_sensor_level();
+        break;
+    case 17:
+        config.Sensor_ON2 = value;
+        sys.Sensor_ON2 = (u32)value * 10UL;
+        bf4g_invalidate_sensor_level();
+        break;
+    case 18:
+        sensor_adc_fresh = 0;       // 下一批采样到达前保持旧工程值失效。
+        sensor_sample_ready = 0;
+        sensor_pending_tanks = SENSOR_PENDING_UPPER | SENSOR_PENDING_LOWER;
+        sys.SensorLever = 0;
+        sys.Sensor_OverFlow = 0;
+        config.Auto_Mode = (u8)value;
+        break;
     case 19:
         config.fault_mask = (u8)value;
+        break;
+    case 20:
+        config.Sensor_overFlow = value;
+        if (sensor_sample_ready && !sys.sensor_err && sys.Auto_Mode == config.Auto_Mode) {
+            sensorOverFlowCheck(); // 已有有效工程值，立即按新阈值更新报警。
+            sensor_alarm_pending = 0;
+        } else {
+            sensor_alarm_pending = 1;
+        }
         break;
     }
 }
@@ -1803,7 +1864,7 @@ static u8 bf4g_write_parameter(u8 xdata *out, u8 length) //20261116-4 add
     if (!config_loaded) {
         return bf4g_error(out, 0x0e, number);
     }
-    if (number > 10 && number != 12 && number != 19) { //20261116-5 change 开放循环、故障恢复及防锈间隔。
+    if (number == 11) { //20261116-6 change 改址由后续切片接入。
         return bf4g_error(out, 1, number);
     }
 

@@ -8,6 +8,7 @@
 #define ADC_NUMB 8
 
 volatile bit voltage_sample_ready; //20261116-2 add 记录已发布的电压采样。
+volatile bit sensor_adc_fresh; //20261116-6 add 新模拟量发布标志供类型切换使用。
 volatile bit current_sample_ready; //20261116-2 add 记录已发布的电流及模拟量采样。
 #define Adc_Filer 60
 #define Adc_Filer_cnt 20
@@ -236,6 +237,7 @@ void MEASURE_Sample(void)
 
                     sys.Cur_AD = Result_AD[6];
                     sys.Vol_AD = Result_AD[7];
+                    sensor_adc_fresh = 1; //20261116-6 add 两路原始模拟量均已发布。
                     current_sample_ready = 1; //20261116-2 add 同组采样已经完成发布。
 #if (Model_Voltage == Model_3PH)
                     u32Temp = sys.Current_A1 + sys.Current_B1 + sys.Current_C1;

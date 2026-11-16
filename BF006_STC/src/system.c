@@ -22,6 +22,8 @@ bit Boot_Flag = 0;
 static volatile bit water_inputs_ready; //20261116-2 add 完成首轮水池输入去抖。
 bit water_status_ready;
 bit sensor_sample_ready;
+u8 sensor_pending_tanks; //20261116-6 add 保留待重新计算的水池选择。
+bit sensor_alarm_pending;
 
 #if (CUSTOMER_TEST_LIMIT_ENABLE == 1)
 static bit Customer_Test_Limit_Fault = 0; //20260501-0 add customer test time-limit fault lock flag for the current power cycle
@@ -73,12 +75,19 @@ void Record_Clr_and_Reset(void)
 }
 #endif
 
-void updatSysdata(void)
+/******************************************************************************
+ * 函数名称       : updatSysdata
+ * 功能描述       : 将参数区的连续量配置换算为控制使用的百分位运行量。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void updatSysdata(void) //20261116-6 change
 {
-    sys.Sensor_Rang = config.Sensor_Rang * 10;
-    sys.Sensor_STOP = config.Sensor_STOP * 10;
-    sys.Sensor_ON1 = config.Sensor_ON1 * 10;
-    sys.Sensor_ON2 = config.Sensor_ON2 * 10;
+    sys.Sensor_Rang = (u32)config.Sensor_Rang * 10UL; //20261116-6 change 先扩宽再将十分位配置换算为百分位运行量。
+    sys.Sensor_STOP = (u32)config.Sensor_STOP * 10UL;
+    sys.Sensor_ON1 = (u32)config.Sensor_ON1 * 10UL;
+    sys.Sensor_ON2 = (u32)config.Sensor_ON2 * 10UL;
 }
 
 void Write_Fault_Mess(u8 dat, u16 dat1, u16 dat2)
@@ -316,47 +325,62 @@ void YaLiCtr_Check(void)
     }
 }
 
-void CUR4_20Ma_Check(void)
+/******************************************************************************
+ * 函数名称       : CUR4_20Ma_Check
+ * 功能描述       : 将同一采样时刻的电流输入换算为百分位工程值。
+ * 输入参数       : sample，电流原始采样。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void CUR4_20Ma_Check(u16 sample) //20261116-6 change
 {
     u32 temp;
-    if (sys.Cur_AD < 100)
+
+    if (sample < 100)
     {
         sys.sensor_err = 1;
         sys.SensorOut = 0;
     }
-    else if (sys.Cur_AD < 196)
+    else if (sample < 196)
     {
         sys.SensorOut = 0;
         sys.sensor_err = 0;
     }
     else
     {
-        if (sys.Cur_AD > 983)
-        {
-            sys.Cur_AD = 983;
+        if (sample > 983) {
+            sample = 983;
         }
         sys.sensor_err = 0;
-        temp = sys.Cur_AD - 196;
+        temp = (u32)sample - 196UL;
         temp *= sys.Sensor_Rang;
         temp += 393;
         sys.SensorOut = temp / 786;
     }
 }
 
-void Vol0_5V_Check(void)
+/******************************************************************************
+ * 函数名称       : Vol0_5V_Check
+ * 功能描述       : 将同一采样时刻的电压输入换算为百分位工程值。
+ * 输入参数       : sample，电压原始采样。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void Vol0_5V_Check(u16 sample) //20261116-6 change
 {
     u32 temp;
-    if (sys.Vol_AD < 2)
+
+    if (sample < 2)
     {
         sys.SensorOut = 0;
         sys.sensor_err = 1;
     }
-    else if (sys.Vol_AD > 10)
+    else if (sample > 10)
     {
 
         sys.sensor_err = 0;
         temp = sys.Sensor_Rang;
-        temp *= (sys.Vol_AD - 10);
+        temp *= (u32)sample - 10UL;
         temp += 506;
         sys.SensorOut = temp / 1013;
     }
@@ -367,9 +391,16 @@ void Vol0_5V_Check(void)
     }
 }
 
-void sensorOverFlowCheck(void)
+/******************************************************************************
+ * 函数名称       : sensorOverFlowCheck
+ * 功能描述       : 按完整百分位工程值和溢流阈值计算报警条件。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void sensorOverFlowCheck(void) //20261116-6 change
 {
-    if (sys.SensorOut > config.Sensor_overFlow * 10)
+    if (sys.SensorOut > (u32)config.Sensor_overFlow * 10UL) //20261116-6 change 以完整百分位比较。
     {
         sys.Sensor_OverFlow = 1;
     }
@@ -379,12 +410,27 @@ void sensorOverFlowCheck(void)
     }
 }
 
-// water level check
-void shuiwei_check(void) //20261116-2 change
+/******************************************************************************
+ * 函数名称       : shuiwei_check
+ * 功能描述       : 根据实际传感器和已发布的采样更新工程量与水池状态。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void shuiwei_check(void) //20261116-6 change
 {
     static u8 water_startup_scans;
-    bit analog_ready = current_sample_ready; // 本轮换算开始前必须已有模拟量采样。
+    bit analog_ready;
     bit tanks_ready = water_inputs_ready;
+    bit interrupts = EA;
+    u16 current;
+    u16 voltage;
+
+    EA = 0;
+    analog_ready = sensor_adc_fresh;   // 采样状态与两个原始值一起读取。
+    current = sys.Cur_AD;
+    voltage = sys.Vol_AD;
+    EA = interrupts;
     if (config.Sensor_Mode == CTROLTYPE_PUMP) // sensor is installed on upper tank
     {
 
@@ -398,20 +444,26 @@ void shuiwei_check(void) //20261116-2 change
         }
         else if (sys.Auto_Mode == SENSORTYPE_WATER4_20MA) // ?λ
         {
-            CUR4_20Ma_Check();
-            sensorOverFlowCheck();
+            if (analog_ready) {
+                CUR4_20Ma_Check(current);
+                sensorOverFlowCheck();
+            }
         }
         else if (sys.Auto_Mode == SENSORTYPE_PRESS4_20MA) // pressure 4-20 mA mode
         {
 
-            CUR4_20Ma_Check();
-            sensorOverFlowCheck();
+            if (analog_ready) {
+                CUR4_20Ma_Check(current);
+                sensorOverFlowCheck();
+            }
         }
         else if (sys.Auto_Mode == SENSORTYPE_PRESS0_5V) // remote pressure mode
         {
 
-            Vol0_5V_Check();
-            sensorOverFlowCheck();
+            if (analog_ready) {
+                Vol0_5V_Check(voltage);
+                sensorOverFlowCheck();
+            }
         }
         else // ?λ
         {
@@ -446,20 +498,26 @@ void shuiwei_check(void) //20261116-2 change
         if (sys.Auto_Mode == SENSORTYPE_WATER4_20MA) // ?λ
         {
 
-            CUR4_20Ma_Check();
-            sensorOverFlowCheck();
+            if (analog_ready) {
+                CUR4_20Ma_Check(current);
+                sensorOverFlowCheck();
+            }
         }
         else if (sys.Auto_Mode == SENSORTYPE_PRESS4_20MA) // ?λ
         {
 
-            CUR4_20Ma_Check();
-            sensorOverFlowCheck();
+            if (analog_ready) {
+                CUR4_20Ma_Check(current);
+                sensorOverFlowCheck();
+            }
         }
         else if (sys.Auto_Mode == SENSORTYPE_PRESS0_5V) // ?λ
         {
 
-            Vol0_5V_Check();
-            sensorOverFlowCheck();
+            if (analog_ready) {
+                Vol0_5V_Check(voltage);
+                sensorOverFlowCheck();
+            }
         }
         else
         {
@@ -482,6 +540,10 @@ void shuiwei_check(void) //20261116-2 change
     sensor_sample_ready = analog_ready &&
                           sys.Auto_Mode >= SENSORTYPE_WATER4_20MA &&
                           sys.Auto_Mode <= SENSORTYPE_PRESS0_5V;
+    if (sys.Auto_Mode < SENSORTYPE_WATER4_20MA ||
+        (sensor_sample_ready && !sys.sensor_err)) {
+        sensor_alarm_pending = 0;     // 报警已按本轮有效值或开关量状态重算。
+    }
 }
 
 /******************************************************************************
@@ -529,7 +591,14 @@ static void cycle_scan(void) //20261116-5 add
     sys.Pump_Flag = sys.autoTimerFlag;  // 跳过零时长阶段后一次发布，避免窄脉冲。
 }
 
-void RELAY_Auto_Control(void)
+/******************************************************************************
+ * 函数名称       : RELAY_Auto_Control
+ * 功能描述       : 依据当前模式和可用的本地输入生成水泵运行意图。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void RELAY_Auto_Control(void) //20261116-6 change
 {
     if (config.Hand_Auto_timer_Flag == RUNMODE_AUTO)
     {
@@ -720,9 +789,10 @@ void RELAY_Auto_Control(void)
             }
         }
 
-        if (sys.sensor_err)
-        {
-            sys.Pump_Flag = 0;
+        if (sys.sensor_err ||
+            (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA && sensor_pending_tanks &&
+             !sensor_sample_ready)) {
+            sys.Pump_Flag = 0;         // 等待新类型采样时不从旧工程值产生启动意图。
         }
     }
     else if (config.Hand_Auto_timer_Flag == RUNMODE_TIMER)
@@ -821,6 +891,10 @@ void RELAY_Auto_Control(void)
                 sys.Pump_Flag = 0;
             }
         }
+    }
+    if (sys.Auto_Mode == config.Auto_Mode &&
+        (sys.Auto_Mode < SENSORTYPE_WATER4_20MA || sensor_sample_ready)) {
+        sensor_pending_tanks = 0;     // 本轮已完成连续量档位与关联状态计算。
     }
 }
 

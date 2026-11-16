@@ -220,7 +220,7 @@ typedef struct{
 	
 	u16 Vol_AD;
 	u16 Cur_AD;
-	u16 SensorOut;
+	u32 SensorOut; //20261116-6 change 保留完整百分位工程值。
 	u8 SensorLever;
 
 	u8 FangXiuAFlag;
@@ -242,10 +242,10 @@ typedef struct{
 	u16 autoTurnA_cnt;
 	u16 autoTurnB_cnt;
 	
-	u16 Sensor_Rang;
-	u16 Sensor_STOP;
-	u16 Sensor_ON1;
-	u16 Sensor_ON2;
+	u32 Sensor_Rang; //20261116-6 change 连续量量程和阈值均以百分位保存。
+	u32 Sensor_STOP;
+	u32 Sensor_ON1;
+	u32 Sensor_ON2;
 	u8 sensor_err;
 	u8 Sensor_OverFlow;
     u8 Pump_master;	
@@ -300,6 +300,11 @@ extern bit Boot_Flag;
 extern sys_t sys;
 extern bit water_status_ready; //20261116-2 add 水位输入已去抖并完成一次档位计算。
 extern bit sensor_sample_ready; //20261116-2 add 已使用采样结果计算当前传感器工程值。
+#define SENSOR_PENDING_UPPER 1 //20261116-6 add 等待重新计算的上池关联状态。
+#define SENSOR_PENDING_LOWER 2
+extern u8 sensor_pending_tanks;
+extern bit sensor_alarm_pending;
+void sensorOverFlowCheck(void);
 
 void sys_init(void);
 void Sys_Control(void);
