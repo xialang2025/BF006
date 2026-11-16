@@ -3,13 +3,38 @@
 #include <string.h>
 #include "uart4.h"
 #include "configPar.h"
+#include "ad.h"
+#include "Display.h"
+#include "HT1622.h"
 
 u8 S4CON, S4BUF, ACC, IE2, P_SW2, T4T3M, TH4, TL4, TH3, TL3, AUXINTIF, EA;
 config_t config;
 bit config_loaded;
+sys_t sys;
+bit Boot_Flag;
+u8 LowWater_M, LowWater_H, HighWater_M, HighWater_H, PUMP_ADD, OverFlow_P, P34;
+volatile bit voltage_sample_ready, current_sample_ready;
+u8 Dis7_Flash, Dis8_Flash;
+u8 LCD_WATER_Hlevel1, LCD_WATER_Hlevel2, LCD_WATER_Hlevel3,
+   LCD_WATER_Hlevel4, LCD_WATER_Hlevel5, LCD_WATER_Hlevel6;
+u8 LCD_WATER_Llevel1, LCD_WATER_Llevel2, LCD_WATER_Llevel3,
+   LCD_WATER_Llevel4, LCD_WATER_Llevel5, LCD_WATER_Llevel6;
 
 void UART4_int(void);
 void UART4_Timer3_int(void);
+void shuiwei_check(void);
+
+/******************************************************************************
+ * 函数名称       : Speak_Con
+ * 功能描述       : 在软件模拟中接收蜂鸣提示。
+ * 输入参数       : value，提示码。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void Speak_Con(u8 value) //20261116-2 add
+{
+    (void)value;
+}
 
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "%d: %s\n", __LINE__, #expr); exit(1); } } while (0)
 
@@ -300,6 +325,217 @@ static void check_parameter_ranges(void) //20261116-1 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_one_runtime_field
+ * 功能描述       : 通过串口读取独立的工作电压。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_one_runtime_field(void) //20261116-2 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 3, 0, 4, 2, 1, 1, 0, 0};
+    u8 reply[19];
+
+    voltage_sample_ready = 1;
+    sys.Voltage_Line = 256;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x83 && reply[8] == 8 && reply[9] == 0);
+    CHECK(reply[10] == 1 && reply[11] == 1 && reply[12] == 0);
+    CHECK(reply[13] == 0 && reply[14] == 0 && reply[15] == 1 && reply[16] == 0);
+    CHECK(crc(reply, sizeof(reply)) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : read_runtime
+ * 功能描述       : 读取一段运行字段，核对数据、质量及校验。
+ * 输入参数       : start，首字段；count，数量；values，预期值；qualities，预期质量。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void read_runtime(u8 start, u8 count, const u32 *values, const u8 *qualities) //20261116-2 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 3, 0, 5, 2, start, count, 0, 0};
+    u8 reply[59];
+    u8 i;
+    u8 *entry;
+    u32 value;
+
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, 14 + 5 * count, 0);
+    CHECK(reply[5] == 0x83 && reply[6] == 0 && reply[7] == 5);
+    CHECK(reply[8] == 3 + 5 * count && reply[9] == 0 && reply[10] == start && reply[11] == count);
+    for (i = 0; i < count; i++) {
+        entry = reply + 12 + 5 * i;
+        value = (u32)entry[1] << 24 | (u32)entry[2] << 16 | (u32)entry[3] << 8 | entry[4];
+        CHECK(entry[0] == qualities[i] && value == values[i]);
+    }
+    CHECK(crc(reply, 14 + 5 * count) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : check_runtime_fields
+ * 功能描述       : 覆盖二十四项、不同机型和未就绪及异常分支。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_runtime_fields(void) //20261116-2 add
+{
+    static const u32 values[] = {
+        219, 11, TEST_PHASES == 3 ? 22 : 0, TEST_PHASES == 3 ? 33 : 0,
+        TEST_PUMPS == 2 ? 44 : 0, TEST_PUMPS == 2 && TEST_PHASES == 3 ? 55 : 0,
+        TEST_PUMPS == 2 && TEST_PHASES == 3 ? 66 : 0, TEST_PUMPS == 2 ? 0x1936 : 0x1816,
+        2, 6, 0x146, 0x21, 0x0a, 2, 0, 12345, 30, 2, 1, 1, 2,
+        (TEST_MODEL_BYTE << 8) | 0x93, 201, 0
+    };
+    static const u8 qualities[] = {
+        0, 0, TEST_PHASES == 3 ? 0 : 1, TEST_PHASES == 3 ? 0 : 1, TEST_PUMPS == 2 ? 0 : 1,
+        TEST_PHASES == 3 && TEST_PUMPS == 2 ? 0 : 1, TEST_PHASES == 3 && TEST_PUMPS == 2 ? 0 : 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+    };
+    static const u32 zeros[] = {0, 0, 0};
+    static const u8 valid[] = {0, 0, 0};
+    static const u8 unavailable[] = {1, 1, 1};
+    static const u8 unloaded[] = {2, 2, 2};
+    static const u8 anomalies[] = {3, 3, 3};
+    static const u32 faults[] = {0, 0x80000002UL, 0};
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 3, 0, 6, 2, 0, 0, 0, 0};
+
+    config.Hand_Auto_timer_Flag = RUNMODE_AUTO;
+    config.Pump_AB_Mode = 2;
+    config.Auto_Mode = SENSORTYPE_WATER4_20MA;
+    config.Sensor_Mode = CTROLTYPE_DRAIN;
+    config.Set_OVERLOAD_Current1 = 900;
+    sys.Auto_Mode = SENSORTYPE_WATER4_20MA;
+    sys.Voltage_Line = 219;
+    sys.Current_A1 = 11;
+    sys.Current_A2 = 44;
+#if TEST_PHASES == 3
+    sys.Current_B1 = 22;
+    sys.Current_C1 = 33;
+    sys.Current_B2 = 55;
+    sys.Current_C2 = 66;
+#endif
+    sys.Pump_A_state = 1;
+    sys.Pump_B_state = 1;
+    sys.shang_shuiwei = 2;
+    sys.xia_shuiwei = 0;
+    sys.Fault_Error = 6;
+    sys.SensorOut = 12345;
+    sys.SensorLever = 2;
+    sys.Sensor_OverFlow = 1;
+    sys.flowover = 1;
+    Dis8_Flash = 1;
+    LCD_WATER_Hlevel1 = LCD_WATER_Hlevel6 = 1;
+    LCD_WATER_Llevel2 = LCD_WATER_Llevel4 = 1;
+    current_sample_ready = voltage_sample_ready = sensor_sample_ready = 1;
+    water_status_ready = Boot_Flag = 1;
+
+    read_runtime(1, 9, values, qualities);
+    read_runtime(10, 9, values + 9, qualities + 9);
+    read_runtime(19, 6, values + 18, qualities + 18);
+
+    water_status_ready = 0;
+    read_runtime(8, 1, zeros, unloaded);
+    water_status_ready = 1;
+    sys.shang_shuiwei = 9;
+    read_runtime(8, 1, zeros, anomalies);
+    read_runtime(14, 1, zeros, anomalies);
+    sys.shang_shuiwei = 2;
+    config.Pump_AB_Mode = 9;
+    if (TEST_PUMPS == 1) {
+        read_runtime(8, 1, values + 7, valid);
+    } else {
+        read_runtime(8, 1, zeros, anomalies);
+    }
+    config.Hand_Auto_timer_Flag = 9;
+    read_runtime(8, 1, zeros, anomalies);
+    sys.Fault_Error = faults[1];
+    read_runtime(9, 3, faults, anomalies);
+
+    config_loaded = 0;
+    read_runtime(16, 3, zeros, unloaded);
+    read_runtime(24, 1, zeros, unavailable);
+    config_loaded = 1;
+    current_sample_ready = 0;
+    read_runtime(2, 1, zeros, unloaded);
+    if (TEST_PHASES == 1) {
+        read_runtime(3, 2, zeros, unavailable);
+    }
+    sensor_sample_ready = 0;
+    read_runtime(16, 1, zeros, unloaded);
+    sensor_sample_ready = 1;
+    sys.SensorOut = 0;
+    sys.sensor_err = 1;
+    read_runtime(16, 1, zeros, anomalies);
+    read_runtime(21, 1, zeros, anomalies);
+    sys.sensor_err = 0;
+    read_runtime(16, 1, zeros, valid);
+    sys.Auto_Mode = SENSORTYPE_PRESS0_5V;
+    read_runtime(18, 1, zeros, unloaded);
+    read_runtime(20, 1, zeros, unloaded);
+    config.Auto_Mode = SENSORTYPE_PRESS0_5V;
+    sys.sensor_err = 1;
+    read_runtime(16, 1, zeros, anomalies);
+    sys.Auto_Mode = config.Auto_Mode = SENSORTYPE_POLE;
+    read_runtime(16, 1, zeros, unavailable);
+    read_runtime(21, 1, zeros, unavailable);
+    read_runtime(20, 1, zeros, valid);
+    sys.Auto_Mode = config.Auto_Mode = 5;
+    read_runtime(18, 1, zeros, anomalies);
+    config.Sensor_Mode = 2;
+    read_runtime(19, 1, zeros, anomalies);
+
+    check_error(request, sizeof(request), 4, 0);
+    request[9] = 24;
+    request[10] = 2;
+    check_error(request, sizeof(request), 3, 24);
+    request[9] = 1;
+    request[10] = 10;
+    check_error(request, sizeof(request), 3, 1);
+}
+
+/******************************************************************************
+ * 函数名称       : check_sensor_sample
+ * 功能描述       : 让实际换算代码处理两个模拟量输入的异常及有效零。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_sensor_sample(void) //20261116-2 add
+{
+    static const u32 zeros[] = {0};
+    static const u8 valid[] = {0};
+    static const u8 anomalous[] = {3};
+    static const u8 unloaded[] = {2};
+
+    config.Sensor_Mode = CTROLTYPE_PUMP;
+    config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_WATER4_20MA;
+    current_sample_ready = 0;
+    sys.Cur_AD = 99;
+    shuiwei_check();
+    read_runtime(16, 1, zeros, unloaded);
+
+    current_sample_ready = 1;
+    shuiwei_check();
+    read_runtime(16, 1, zeros, anomalous);
+    sys.Cur_AD = 100;
+    shuiwei_check();
+    read_runtime(16, 1, zeros, valid);
+
+    config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_PRESS0_5V;
+    sys.Vol_AD = 1;
+    shuiwei_check();
+    read_runtime(16, 1, zeros, anomalous);
+    sys.Vol_AD = 2;
+    shuiwei_check();
+    read_runtime(16, 1, zeros, valid);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -369,6 +605,9 @@ int main(void) //20261116-0 add
 
     check_one_parameter();
     check_parameter_ranges();
+    check_one_runtime_field();
+    check_runtime_fields();
+    check_sensor_sample();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

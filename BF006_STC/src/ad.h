@@ -16,6 +16,9 @@ typedef struct{
 	
 }MEASURE_T;
 
+extern volatile bit voltage_sample_ready; //20261116-2 add 首次有效发布电压后置位。
+extern volatile bit current_sample_ready; //20261116-2 add 首次发布各相电流及模拟量后置位。
+
 void MEASURE_Pro(void);
 void MEASURE_init(void);
 void MEASURE_timeOut(void);

@@ -962,6 +962,9 @@ void Analyse_4G(void)
 #include "uart4.h"
 #include "system.h"
 #include "Modbus_New.h"
+#include "ad.h"
+#include "Display.h"
+#include "HT1622.h"
 
 #define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
 #define BF4G_DATA         9
@@ -1252,6 +1255,413 @@ static u8 bf4g_read_parameters(u8 xdata *out, u8 length) //20261116-1 add
     return 3 + count * 3;
 }
 
+
+/******************************************************************************
+ * 函数名称       : bf4g_adc_value
+ * 功能描述       : 原子读取由采样中断发布的一个十六位测量值。
+ * 输入参数       : source，测量值位置。
+ * 返回值         : 完整的测量值。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_adc_value(const u16 xdata *source) //20261116-2 add
+{
+    bit interrupts;
+    u16 value;
+
+    interrupts = EA;
+    EA = 0;
+    value = *source;
+    EA = interrupts;
+    return value;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_fault_valid
+ * 功能描述       : 检查故障原位图的保留位和机型适用位。
+ * 输入参数       : faults，原位图。
+ * 返回值         : 合法时为一。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static bit bf4g_fault_valid(u32 faults) //20261116-2 add
+{
+    if (faults & 0xfffe0000UL) {
+        return 0;
+    }
+#if (Model_OUT == Model_1C1)
+    if (faults & 0x00014f80UL) {
+        return 0;
+    }
+#endif
+#if (Model_Voltage == Model_1PH)
+    return (faults & 0x00000e70UL) == 0;
+#else
+    return 1;
+#endif
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_first_fault
+ * 功能描述       : 从完整位图得到优先故障代码。
+ * 输入参数       : faults，通过机型校验的故障位图。
+ * 返回值         : 最低有效位加一，零表示没有故障。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_first_fault(u32 faults) //20261116-2 add
+{
+    u8 number = 1;
+
+    if (faults == 0) {
+        return 0;
+    }
+    while ((faults & 1) == 0) {
+        number++;
+        faults >>= 1;
+    }
+    return number;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_tank_quality
+ * 功能描述       : 判断构造水池状态所需的液位是否已经建立。
+ * 输入参数       : None
+ * 返回值         : 读数质量。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_tank_quality(void) //20261116-2 add
+{
+    if (!config_loaded || !water_status_ready) {
+        return 2;
+    }
+    return (sys.shang_shuiwei > 2 || sys.xia_shuiwei > 2) ? 3 : 0;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_run_status
+ * 功能描述       : 编制模式、运行、主备和两水池档位的状态位。
+ * 输入参数       : quality，质量输出位置。
+ * 返回值         : 运行状态位图。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_run_status(u8 *quality) //20261116-2 add
+{
+    static const u8 code mode_bits[] = {1, 6, 10};
+    u16 state;
+    u8 mode = config.Hand_Auto_timer_Flag;
+    u8 priority = config.Pump_AB_Mode;
+
+    *quality = bf4g_tank_quality();
+    if (*quality != 0) {
+        return 0;
+    }
+    if (mode > RUNMODE_TIMER || (Model_OUT == Model_1C2 && priority > 2)) {
+        *quality = 3;
+        return 0;
+    }
+
+    state = mode_bits[mode];
+    if (sys.Pump_A_state) {
+        state |= 0x0010;
+    }
+#if (Model_OUT == Model_1C2)
+    if (sys.Pump_B_state) {
+        state |= 0x0020;
+    }
+    state |= (u16)0x0040 << priority;
+#endif
+
+    state |= (u16)0x0200 << sys.shang_shuiwei;
+    state |= (u16)0x1000 << sys.xia_shuiwei;
+    return state;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_alarm
+ * 功能描述       : 从故障位图和水池档位生成报警摘要。
+ * 输入参数       : faults，已经校验的故障位图。
+ * 返回值         : 报警摘要位图。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_alarm(u32 faults) //20261116-2 add
+{
+    u16 alarm = faults & 3;
+
+    if (faults & 0x00000084UL) {
+        alarm |= 0x0004;             // 任一泵过载。
+    }
+    if (faults & 0x00006108UL) {
+        alarm |= 0x0008;             // 任一泵空载或干转。
+    }
+    if (faults & 0x00000e70UL) {
+        alarm |= 0x0020;             // 任一泵缺相。
+    }
+    if (sys.shang_shuiwei == 2) {
+        alarm |= 0x0040;
+    }
+    if (sys.xia_shuiwei == 0) {
+        alarm |= 0x0100;
+    }
+    return alarm;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_sensor_type_quality
+ * 功能描述       : 验证实际运行类型与当前配置是否一致。
+ * 输入参数       : type，实际运行类型。
+ * 返回值         : 读数质量。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_sensor_type_quality(u8 type) //20261116-2 add
+{
+    if (!config_loaded) {
+        return 2;
+    }
+    if (type > SENSORTYPE_PRESS0_5V || config.Auto_Mode > SENSORTYPE_PRESS0_5V) {
+        return 3;
+    }
+    return type == config.Auto_Mode ? 0 : 2;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_sensor_read
+ * 功能描述       : 生成同一运行类型下的传感器工程值、标志、单位和档位。
+ * 输入参数       : number，字段号；quality，质量输出位置。
+ * 返回值         : 传感器字段值。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u32 bf4g_sensor_read(u8 number, u8 *quality) //20261116-2 add
+{
+    u8 type = sys.Auto_Mode;
+    u8 flags;
+
+    *quality = bf4g_sensor_type_quality(type);
+    if (*quality != 0) {
+        return 0;
+    }
+    if (number == 0x12) {
+        return type;
+    }
+    if (number == 0x14) {
+        if (type < SENSORTYPE_WATER4_20MA) {
+            return 0;
+        }
+        return type == SENSORTYPE_WATER4_20MA ? 1 : 2;
+    }
+    if (number == 0x11) {
+        if (!Boot_Flag || !water_status_ready ||
+            (type >= SENSORTYPE_WATER4_20MA && !sensor_sample_ready)) {
+            *quality = 2;
+            return 0;
+        }
+        if (sys.shang_shuiwei > 2) {
+            *quality = 3;
+            return 0;
+        }
+        flags = (sys.sensor_err ? 1 : 0) | (sys.Sensor_OverFlow ? 2 : 0) |
+                (sys.flowover ? 4 : 0) | (Dis8_Flash == 1 ? 16 : 0);
+        if (Dis7_Flash == 1 || sys.shang_shuiwei == 2) {
+            flags |= 8;
+        }
+        return flags;
+    }
+
+    if (type < SENSORTYPE_WATER4_20MA) {
+        *quality = 1;
+        return 0;
+    }
+    if (!sensor_sample_ready || (number == 0x15 && !Boot_Flag)) {
+        *quality = 2;
+        return 0;
+    }
+    if (sys.sensor_err || (number == 0x15 && sys.SensorLever > 2)) {
+        *quality = 3;                // 断线等异常分支清零的结果不是有效零。
+        return 0;
+    }
+    return number == 0x10 ? (u32)sys.SensorOut : (u32)sys.SensorLever;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_run_read
+ * 功能描述       : 按运行字段号读取其值和对应质量。
+ * 输入参数       : number，已经校验的字段号；quality，质量输出位置。
+ * 返回值         : 无效值为零，异常故障位图保留原值。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
+{
+    const u16 xdata *measurement;
+    u32 faults;
+    u8 level;
+
+    *quality = 0;
+    if (number <= 0x07) {
+        switch (number) {
+        case 1:
+            measurement = &sys.Voltage_Line;
+            break;
+        case 2:
+            measurement = &sys.Current_A1;
+            break;
+#if (Model_OUT == Model_1C2)
+        case 5:
+            measurement = &sys.Current_A2;
+            break;
+#endif
+#if (Model_Voltage == Model_3PH)
+        case 3:
+            measurement = &sys.Current_B1;
+            break;
+        case 4:
+            measurement = &sys.Current_C1;
+            break;
+#if (Model_OUT == Model_1C2)
+        case 6:
+            measurement = &sys.Current_B2;
+            break;
+        case 7:
+            measurement = &sys.Current_C2;
+            break;
+#endif
+#endif
+        default:
+            *quality = 1;
+            return 0;
+        }
+
+        if (number == 1 ? !voltage_sample_ready : !current_sample_ready) {
+            *quality = 2;
+            return 0;
+        }
+        return bf4g_adc_value(measurement);
+    }
+
+    switch (number) {
+    case 0x08:
+        return bf4g_run_status(quality);
+    case 0x09:
+    case 0x0a:
+    case 0x0b:
+        if (number == 0x0b) {
+            *quality = bf4g_tank_quality();
+            if (*quality != 0) {
+                return 0;
+            }
+        }
+        faults = sys.Fault_Error;
+        if (!bf4g_fault_valid(faults)) {
+            *quality = 3;
+            return number == 0x0a ? faults : 0;
+        }
+        if (number == 0x0a) {
+            return faults;
+        }
+        return number == 0x09 ? bf4g_first_fault(faults) : bf4g_alarm(faults);
+    case 0x0c:
+    case 0x0d:
+        if (!config_loaded || !water_status_ready || !Boot_Flag) {
+            *quality = 2;
+            return 0;
+        }
+        if (number == 0x0c) {
+            return (LCD_WATER_Hlevel1 ? 1 : 0) | (LCD_WATER_Hlevel2 ? 2 : 0) |
+                   (LCD_WATER_Hlevel3 ? 4 : 0) | (LCD_WATER_Hlevel4 ? 8 : 0) |
+                   (LCD_WATER_Hlevel5 ? 16 : 0) | (LCD_WATER_Hlevel6 ? 32 : 0);
+        }
+        return (LCD_WATER_Llevel1 ? 1 : 0) | (LCD_WATER_Llevel2 ? 2 : 0) |
+               (LCD_WATER_Llevel3 ? 4 : 0) | (LCD_WATER_Llevel4 ? 8 : 0) |
+               (LCD_WATER_Llevel5 ? 16 : 0) | (LCD_WATER_Llevel6 ? 32 : 0);
+    case 0x0e:
+    case 0x0f:
+        if (!config_loaded || !water_status_ready) {
+            *quality = 2;
+            return 0;
+        }
+        level = number == 0x0e ? sys.shang_shuiwei : sys.xia_shuiwei;
+        if (level > 2) {
+            *quality = 3;
+            return 0;
+        }
+        return level;
+    case 0x10:
+    case 0x11:
+    case 0x12:
+    case 0x14:
+    case 0x15:
+        return bf4g_sensor_read(number, quality);
+    case 0x13:
+        if (!config_loaded) {
+            *quality = 2;
+            return 0;
+        }
+        if (config.Sensor_Mode > CTROLTYPE_DRAIN) {
+            *quality = 3;
+            return 0;
+        }
+        return config.Sensor_Mode;
+    case 0x16:
+        if (!config_loaded) {
+            *quality = 2;
+            return 0;
+        }
+        return bf4g_model_word();
+    case 0x17:
+        return MODBUS_NEW_VERSION;
+    default:
+        *quality = 1;
+        return 0;                   // 功率没有采样来源。
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_put_u32
+ * 功能描述       : 将三十二位数据按高字节在前写入应答。
+ * 输入参数       : out，写入位置；value，要写入的值。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_put_u32(u8 xdata *out, u32 value) //20261116-2 add
+{
+    bf4g_put_u16(out, (u16)(value >> 16));
+    bf4g_put_u16(out + 2, (u16)value);
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_read_runtime
+ * 功能描述       : 校验运行字段区间并写入每项质量和三十二位值。
+ * 输入参数       : out，请求及应答数据位置；length，请求数据长度。
+ * 返回值         : 应答数据长度。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_read_runtime(u8 xdata *out, u8 length) //20261116-2 add
+{
+    u8 start;
+    u8 count;
+    u8 i;
+    u8 quality;
+    u32 value;
+
+    if (length != 2) {
+        return bf4g_error(out, 3, length ? out[0] : 0xff);
+    }
+    start = out[0];
+    count = out[1];
+    if (start == 0 || start > 0x18) {
+        return bf4g_error(out, 4, start);
+    }
+    if (count == 0 || count > 9 || count > 0x19 - start) {
+        return bf4g_error(out, 3, start);
+    }
+
+    out[0] = 0;
+    out[1] = start;
+    out[2] = count;
+    for (i = 0; i < count; i++) {
+        value = bf4g_run_read(start + i, &quality);
+        out[3 + i * 5] = quality;
+        bf4g_put_u32(out + 4 + i * 5, value);
+    }
+    return 3 + count * 5;
+}
+
 /******************************************************************************
  * 函数名称       : bf4g_reply
  * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
@@ -1259,7 +1669,7 @@ static u8 bf4g_read_parameters(u8 xdata *out, u8 length) //20261116-1 add
  * 返回值         : 应答字节数，静默丢弃为零。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-1 change
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-2 change
 {
     u8 xdata *out;
     u8 data_length;
@@ -1280,7 +1690,8 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-1 change
         }
         data_length = bf4g_error(out, 2, 0xff);
     } else if (data_length != length - BF4G_OVERHEAD || (frame[6] | frame[7]) == 0) {
-        object = frame[5] == 2 && data_length && length > BF4G_OVERHEAD ? out[0] : 0xff;
+        object = (frame[5] == 2 || frame[5] == 3) && data_length &&
+                 length > BF4G_OVERHEAD ? out[0] : 0xff;
         data_length = bf4g_error(out, 3, object);
     } else {
         switch (frame[5]) {
@@ -1294,6 +1705,9 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-1 change
             break;
         case 2:
             data_length = bf4g_read_parameters(out, data_length);
+            break;
+        case 3:
+            data_length = bf4g_read_runtime(out, data_length);
             break;
         default:
             data_length = bf4g_error(out, 1, 0xff);

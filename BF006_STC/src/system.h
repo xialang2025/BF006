@@ -298,6 +298,8 @@ sbit 	RS485_EN = P3^5;
 
 extern bit Boot_Flag;
 extern sys_t sys;
+extern bit water_status_ready; //20261116-2 add 水位输入已去抖并完成一次档位计算。
+extern bit sensor_sample_ready; //20261116-2 add 已使用采样结果计算当前传感器工程值。
 
 void sys_init(void);
 void Sys_Control(void);

@@ -3,6 +3,7 @@
 #include "configPar.h"
 #include "Display.h"
 #include "user.h"
+#include "ad.h" //20261116-2 add 查询首次模拟量采集是否完成。
 //20261113-0 del 封存旧协议头文件引用：#include "updata4G.h"
 
 #define BIAS_ADDR 0x0000
@@ -18,6 +19,9 @@ void Fault_ReStart(void);
 sys_t sys;
 
 bit Boot_Flag = 0;
+static volatile bit water_inputs_ready; //20261116-2 add 完成首轮水池输入去抖。
+bit water_status_ready;
+bit sensor_sample_ready;
 
 #if (CUSTOMER_TEST_LIMIT_ENABLE == 1)
 static bit Customer_Test_Limit_Fault = 0; //20260501-0 add customer test time-limit fault lock flag for the current power cycle
@@ -203,6 +207,10 @@ void Water_Level(void)
         P34 = 0;
     }
 
+    if (i == 131) { //20261116-2 add 首轮已连续执行十一拍水池输入检测。
+        water_inputs_ready = 1;
+    }
+
     if (++i > 150)
     {
         i = 0;
@@ -372,8 +380,11 @@ void sensorOverFlowCheck(void)
 }
 
 // water level check
-void shuiwei_check(void)
+void shuiwei_check(void) //20261116-2 change
 {
+    static u8 water_startup_scans;
+    bit analog_ready = current_sample_ready; // 本轮换算开始前必须已有模拟量采样。
+    bit tanks_ready = water_inputs_ready;
     if (config.Sensor_Mode == CTROLTYPE_PUMP) // sensor is installed on upper tank
     {
 
@@ -463,6 +474,14 @@ void shuiwei_check(void)
             Speak_Con(5);
         }
     }
+    if (!water_status_ready && tanks_ready) {
+        if (++water_startup_scans >= 3) {
+            water_status_ready = 1; //20261116-2 add 覆盖水池档位建立所需的最长扫描次数。
+        }
+    }
+    sensor_sample_ready = analog_ready &&
+                          sys.Auto_Mode >= SENSORTYPE_WATER4_20MA &&
+                          sys.Auto_Mode <= SENSORTYPE_PRESS0_5V;
 }
 
 void RELAY_Auto_Control(void)

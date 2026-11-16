@@ -6,6 +6,9 @@
 //========================================================================
 #define ADC_START 0x40 // ADC 转换启动控制位。自动清
 #define ADC_NUMB 8
+
+volatile bit voltage_sample_ready; //20261116-2 add 记录已发布的电压采样。
+volatile bit current_sample_ready; //20261116-2 add 记录已发布的电流及模拟量采样。
 #define Adc_Filer 60
 #define Adc_Filer_cnt 20
 code u8 ADC_Chanle[ADC_NUMB] = {1, 0, 14, 13, 11, 10, 9, 8};
@@ -183,6 +186,7 @@ void MEASURE_Sample(void)
                 Sum_Vol >>= 2;
                 Sum_Vol_cnt = 0;
                 sys.Voltage_Line = Sum_Vol * 98 / 100;
+                voltage_sample_ready = 1; //20261116-2 add 计算结束后才允许通信读取。
                 Sum_Vol = 0;
             }
             if (Measure_flag.bits.finish)
@@ -232,6 +236,7 @@ void MEASURE_Sample(void)
 
                     sys.Cur_AD = Result_AD[6];
                     sys.Vol_AD = Result_AD[7];
+                    current_sample_ready = 1; //20261116-2 add 同组采样已经完成发布。
 #if (Model_Voltage == Model_3PH)
                     u32Temp = sys.Current_A1 + sys.Current_B1 + sys.Current_C1;
 
