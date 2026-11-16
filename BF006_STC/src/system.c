@@ -484,6 +484,51 @@ void shuiwei_check(void) //20261116-2 change
                           sys.Auto_Mode <= SENSORTYPE_PRESS0_5V;
 }
 
+/******************************************************************************
+ * 函数名称       : cycle_pump_ready
+ * 功能描述       : 判断循环阶段是否至少有一路实际水泵未处于故障。
+ * 输入参数       : None
+ * 返回值         : 可累计运行时间时为一。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static bit cycle_pump_ready(void) //20261116-5 add
+{
+#if (Model_OUT == Model_1C2)
+    return sys.Fault_A_Flag == 0 || sys.Fault_B_Flag == 0;
+#else
+    return sys.Fault_A_Flag == 0;
+#endif
+}
+
+/******************************************************************************
+ * 函数名称       : cycle_scan
+ * 功能描述       : 按当前时长切换循环阶段，只发布最终启动或停止意图。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void cycle_scan(void) //20261116-5 add
+{
+    u32 run_seconds = (u32)config.AUTO_Timing_Run * 60UL;
+    u32 stop_seconds = (u32)config.AUTO_Timing_Stop * 60UL;
+
+    if (run_seconds == 0 && stop_seconds == 0) {
+        sys.Pump_Flag = 0;              // 暂停输出，保留当前阶段及已累计时间。
+        return;
+    }
+    if (sys.autoTimerFlag) {
+        if (run_seconds == 0 ||
+            (cycle_pump_ready() && sys.Auto_timer_count >= run_seconds)) {
+            sys.Auto_timer_count = 0;
+            sys.autoTimerFlag = stop_seconds == 0;
+        }
+    } else if (stop_seconds == 0 || sys.Auto_timer_count >= stop_seconds) {
+        sys.Auto_timer_count = 0;
+        sys.autoTimerFlag = run_seconds != 0;
+    }
+    sys.Pump_Flag = sys.autoTimerFlag;  // 跳过零时长阶段后一次发布，避免窄脉冲。
+}
+
 void RELAY_Auto_Control(void)
 {
     if (config.Hand_Auto_timer_Flag == RUNMODE_AUTO)
@@ -682,27 +727,7 @@ void RELAY_Auto_Control(void)
     }
     else if (config.Hand_Auto_timer_Flag == RUNMODE_TIMER)
     {
-        if (sys.autoTimerFlag)
-        {
-            if ((sys.Fault_A_Flag == 0) || (sys.Fault_B_Flag == 0))
-            {
-                if (sys.Auto_timer_count >= config.AUTO_Timing_Run * 60)
-                {
-                    sys.Auto_timer_count = 0;
-                    sys.autoTimerFlag = 0;
-                }
-            }
-            sys.Pump_Flag = 1;
-        }
-        else
-        {
-            if (sys.Auto_timer_count >= config.AUTO_Timing_Stop * 60)
-            {
-                sys.Auto_timer_count = 0;
-                sys.autoTimerFlag = 1;
-            }
-            sys.Pump_Flag = 0;
-        }
+        cycle_scan(); //20261116-5 change 先处理零时长和阶段切换，再输出循环意图。
     }
     else
     {
@@ -799,23 +824,22 @@ void RELAY_Auto_Control(void)
     }
 }
 
-void Timer_mode(void)
+/******************************************************************************
+ * 函数名称       : Timer_mode
+ * 功能描述       : 按秒累计当前阶段，零时长和暂停的循环阶段不累计。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void Timer_mode(void) //20261116-5 change
 {
-    if (config.Hand_Auto_timer_Flag == RUNMODE_TIMER)
-    {
-        if (sys.autoTimerFlag)
-        {
-            if ((sys.Fault_A_Flag == 0) || (sys.Fault_B_Flag == 0))
-            {
+    if (config.Hand_Auto_timer_Flag == RUNMODE_TIMER) {
+        if (sys.autoTimerFlag) {
+            if (config.AUTO_Timing_Run != 0 && cycle_pump_ready()) {
                 sys.Auto_timer_count++;
             }
-        }
-        else
-        {
-            if (config.AUTO_Timing_Stop > 0)
-            {
-                sys.Auto_timer_count++;
-            }
+        } else if (config.AUTO_Timing_Stop != 0) {
+            sys.Auto_timer_count++;
         }
     }
     else if (config.shuiWeiDingshi && (sys.Auto_Mode == SENSORTYPE_POLE) && (sys.Pump_Flag > 0))
@@ -1051,8 +1075,16 @@ void Sys_Control(void)
     }
 }
 
-void FanXiu_pro(void)
+/******************************************************************************
+ * 函数名称       : FanXiu_pro
+ * 功能描述       : 按秒累计停泵时间，达到防锈间隔后产生原防锈意图。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void FanXiu_pro(void) //20261116-5 change
 {
+    u32 interval = (u32)config.AUTO_FANGXIU * 600UL;
 
     if (config.AUTO_FANGXIU == 0)
     {
@@ -1072,7 +1104,7 @@ void FanXiu_pro(void)
         sys.Fang_Xiu_count_B++;
     }
 
-    if (sys.Fang_Xiu_count_B >= config.AUTO_FANGXIU * 600)
+    if (sys.Fang_Xiu_count_B >= interval)
     {
         sys.FangXiuBFlag = 1;
         sys.Fang_Xiu_count_B = 0;
@@ -1088,7 +1120,7 @@ void FanXiu_pro(void)
         sys.Fang_Xiu_count_A++;
     }
 
-    if (sys.Fang_Xiu_count_A >= config.AUTO_FANGXIU * 600)
+    if (sys.Fang_Xiu_count_A >= interval)
     {
         sys.FangXiuAFlag = 1;
         sys.Fang_Xiu_count_A = 0;
@@ -2117,13 +2149,22 @@ void ReStart_Clear_Fault(void)
     }
 }
 
-void Fault_ReStart(void)
+/******************************************************************************
+ * 函数名称       : Fault_ReStart
+ * 功能描述       : 按各故障已累计的秒数执行原自动恢复检查。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void Fault_ReStart(void) //20261116-5 change
 {
-    static u16 Timer_Standby_Cnt1 = 0;  // fault recovery timer counter
-    static u16 Timer_Overload_Cnt1 = 0; // fault recovery timer counter
-    static u16 Timer_Standby_Cnt2 = 0;  // fault recovery timer counter
-    static u16 Timer_Overload_Cnt2 = 0; // fault recovery timer counter
-    static u16 Timer1 = 0;              // fault recovery timer counter
+    static u32 Timer_Standby_Cnt1 = 0;   // A 泵空载恢复计时。
+    static u32 Timer_Overload_Cnt1 = 0;  // A 泵过载恢复计时。
+    static u32 Timer_Standby_Cnt2 = 0;   // B 泵空载恢复计时。
+    static u32 Timer_Overload_Cnt2 = 0;  // B 泵过载恢复计时。
+    static u16 Timer1 = 0;             // 电压故障恢复计时。
+    u32 standby_seconds = (u32)config.Timer_Standby_Restart * 60UL;
+    u32 overload_seconds = (u32)config.Timer_Unload_Restart * 60UL;
 
     // fault recovery
     if (Fault_Error_Check(ERR_UVP) || Fault_Error_Check(ERR_OVP))
@@ -2170,7 +2211,7 @@ void Fault_ReStart(void)
         if (config.Timer_Standby_Restart != 0)
         {
 
-            if (Timer_Standby_Cnt1 >= config.Timer_Standby_Restart * 60)
+            if (Timer_Standby_Cnt1 >= standby_seconds)
             {
                 Timer_Standby_Cnt1 = 0;
 
@@ -2199,7 +2240,7 @@ void Fault_ReStart(void)
         {
             if (config.Timer_Unload_Restart != 0)
             {
-                if (Timer_Overload_Cnt1 >= config.Timer_Unload_Restart * 60)
+                if (Timer_Overload_Cnt1 >= overload_seconds)
                 {
                     Timer_Overload_Cnt1 = 0;
                     Fault_Error_Clear(ERR_OVERLOAD1);
@@ -2223,7 +2264,7 @@ void Fault_ReStart(void)
         if (config.Timer_Standby_Restart != 0)
         {
 
-            if (Timer_Standby_Cnt2 >= config.Timer_Standby_Restart * 60)
+            if (Timer_Standby_Cnt2 >= standby_seconds)
             {
                 Timer_Standby_Cnt2 = 0;
 
@@ -2255,7 +2296,7 @@ void Fault_ReStart(void)
             if (config.Timer_Unload_Restart != 0)
             {
 
-                if (Timer_Overload_Cnt2 >= config.Timer_Unload_Restart * 60)
+                if (Timer_Overload_Cnt2 >= overload_seconds)
                 {
                     Timer_Overload_Cnt2 = 0;
 

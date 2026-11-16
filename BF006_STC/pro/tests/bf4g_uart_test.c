@@ -15,6 +15,7 @@ static u8 flash_writes;
 sys_t sys;
 bit Boot_Flag;
 u8 LowWater_M, LowWater_H, HighWater_M, HighWater_H, PUMP_ADD, OverFlow_P, P34;
+u8 RELAY1, RELAY2, RELAY3;
 volatile bit voltage_sample_ready, current_sample_ready;
 u8 Dis7_Flash, Dis8_Flash;
 u8 LCD_WATER_Hlevel1, LCD_WATER_Hlevel2, LCD_WATER_Hlevel3,
@@ -25,6 +26,11 @@ u8 LCD_WATER_Llevel1, LCD_WATER_Llevel2, LCD_WATER_Llevel3,
 void UART4_int(void);
 void UART4_Timer3_int(void);
 void shuiwei_check(void);
+void Timer_mode(void);
+void RELAY_Auto_Control(void);
+void FanXiu_pro(void);
+void Fault_ReStart(void);
+void Sys_Control(void);
 
 /******************************************************************************
  * 函数名称       : Speak_Con
@@ -79,6 +85,17 @@ void EEPROM_write_n(u16 address, u8 *source, u16 length) //20261116-4 add
     CHECK(flash[0] == 0xff && flash[sizeof(flash) - 1] == 0xff);
     memcpy(flash, source, length);
     flash_writes++;
+}
+
+/******************************************************************************
+ * 函数名称       : Speak_Stop
+ * 功能描述       : 在软件模拟中处理取消蜂鸣输出。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void Speak_Stop(void) //20261116-5 add
+{
 }
 
 static const u8 info_request[] = {0x01, 0x43, 0xbf, 0x06, 0x03, 0x01,
@@ -811,6 +828,153 @@ static void check_parameter_save(void) //20261116-4 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_cycle_counter
+ * 功能描述       : 验证实际循环计时跨越十六位边界。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_cycle_counter(void) //20261116-5 add
+{
+    config.Hand_Auto_timer_Flag = RUNMODE_TIMER;
+    config.AUTO_Timing_Run = 9999;
+    config.AUTO_Timing_Stop = 9999;
+    sys.autoTimerFlag = 1;
+    sys.Auto_timer_count = 65535;
+    Timer_mode();
+    RELAY_Auto_Control();
+    CHECK(sys.Auto_timer_count == 65536UL);
+    CHECK(sys.autoTimerFlag == 1 && sys.Pump_Flag == 1);
+}
+
+/******************************************************************************
+ * 函数名称       : check_cycle_settings
+ * 功能描述       : 从串口写入计时并验证完整秒数及零阶段的控制意图。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_cycle_settings(void) //20261116-5 add
+{
+    static const u16 values[] = {9999, 9999, 9999, 9999, 999};
+    static const u8 qualities[] = {0, 0, 0, 0, 0};
+    u8 i;
+
+    for (i = 0; i < 5; i++) {
+        write_parameter_request(6 + i, values[i]);
+    }
+    read_parameters(6, 5, values, qualities);
+    CHECK(sys.Auto_timer_count == 65536UL);
+    sys.save_flag = 0;
+    write_parameter_request(6, 9999);
+    CHECK(sys.save_flag == 0 && sys.Auto_timer_count == 65536UL);
+    sys.Auto_timer_count = 10116UL;
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 1);
+    sys.Auto_timer_count = 599938UL;
+    Timer_mode();
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 1 && sys.Auto_timer_count == 599939UL);
+    Timer_mode();
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 0 && sys.autoTimerFlag == 0 && sys.Auto_timer_count == 0);
+    sys.Auto_timer_count = 599939UL;
+    Timer_mode();
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 1 && sys.autoTimerFlag == 1 && sys.Auto_timer_count == 0);
+
+    write_parameter_request(7, 0);
+    sys.Auto_timer_count = 599939UL;
+    Timer_mode();
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 1 && sys.autoTimerFlag == 1 && sys.Auto_timer_count == 0);
+
+    sys.Auto_timer_count = 12;
+    write_parameter_request(6, 0);
+    CHECK(sys.Auto_timer_count == 12);
+    Timer_mode();
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 0 && sys.autoTimerFlag == 1 && sys.Auto_timer_count == 12);
+    Sys_Control();
+    CHECK(sys.Pump_A_ON == 0 && sys.Pump_B_ON == 0 && config.Hand_Auto_timer_Flag == RUNMODE_TIMER);
+    write_parameter_request(7, 1);
+    RELAY_Auto_Control();
+    Sys_Control();
+    CHECK(sys.Pump_Flag == 0 && sys.autoTimerFlag == 0 && sys.Auto_timer_count == 0);
+    sys.Auto_timer_count = 59;
+    Timer_mode();
+    RELAY_Auto_Control();
+    Sys_Control();
+    CHECK(sys.Pump_A_ON == 0 && sys.Pump_B_ON == 0 && sys.autoTimerFlag == 0);
+    write_parameter_request(6, 1);
+    sys.Auto_timer_count = 59;
+    Timer_mode();
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 1 && sys.autoTimerFlag == 1);
+}
+
+/******************************************************************************
+ * 函数名称       : check_recovery_timers
+ * 功能描述       : 连续推进四条故障恢复计时以及两路防锈计时。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_recovery_timers(void) //20261116-5 add
+{
+    u32 i;
+    const u32 pump_a_faults = ((u32)1 << ERR_STANDBY1) | ((u32)1 << ERR_OVERLOAD1);
+    const u32 pump_b_faults = ((u32)1 << ERR_STANDBY2) | ((u32)1 << ERR_OVERLOAD2);
+    const u32 all_faults = pump_a_faults | (TEST_PUMPS == 2 ? pump_b_faults : 0);
+
+    sys.Fault_Error = all_faults;
+    write_parameter_request(8, 0);
+    write_parameter_request(9, 0);
+    Fault_ReStart();
+    CHECK(sys.Fault_Error == all_faults);
+    write_parameter_request(8, 9999);
+    write_parameter_request(9, 9999);
+    Fault_ReStart();                   // 故障当秒执行原恢复检查。
+    for (i = 1; i < 599940UL; i++) {
+        Fault_ReStart();
+        CHECK(sys.Fault_Error == all_faults);
+    }
+    Fault_ReStart();
+    CHECK(sys.Fault_Error == 0);
+    sys.Fault_Error = (u32)1 << ERR_OVERLOAD1;
+    sys.Contact_Overload_A_Flag = 1;
+#if TEST_PUMPS == 2
+    sys.Fault_Error |= (u32)1 << ERR_OVERLOAD2;
+    sys.Contact_Overload_B_Flag = 1;
+#endif
+    write_parameter_request(9, 1);
+    for (i = 0; i <= 60; i++) {
+        Fault_ReStart();
+    }
+    CHECK(sys.Fault_Error & ((u32)1 << ERR_OVERLOAD1));
+    sys.Contact_Overload_A_Flag = 0;
+#if TEST_PUMPS == 2
+    CHECK(sys.Fault_Error & ((u32)1 << ERR_OVERLOAD2));
+    sys.Contact_Overload_B_Flag = 0;
+#endif
+
+    sys.Pump_A_state = sys.Pump_B_state = 0;
+    sys.Fang_Xiu_count_A = sys.Fang_Xiu_count_B = 9575;
+    FanXiu_pro();
+    CHECK(sys.FangXiuAFlag == 0 && sys.FangXiuBFlag == 0);
+    for (i = 9576; i < 599399UL; i++) {
+        FanXiu_pro();
+        CHECK(sys.FangXiuAFlag == 0 && sys.FangXiuBFlag == 0);
+    }
+    FanXiu_pro();
+    CHECK(sys.FangXiuAFlag == 1 && sys.FangXiuBFlag == 1);
+    write_parameter_request(10, 0);
+    FanXiu_pro();
+    CHECK(sys.FangXiuAFlag == 0 && sys.FangXiuBFlag == 0);
+    CHECK(sys.Fault_Error & ((u32)1 << ERR_OVERLOAD1));
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -886,6 +1050,9 @@ int main(void) //20261116-0 add
     check_history();
     check_parameter_writes();
     check_parameter_save();
+    check_cycle_counter();
+    check_cycle_settings();
+    check_recovery_timers();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

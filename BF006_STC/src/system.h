@@ -226,14 +226,14 @@ typedef struct{
 	u8 FangXiuAFlag;
     u8 FangXiuBFlag;
 	
-	u16 Fang_Xiu_count_A;	// anti-rust run counter for pump A
-	u16 Fang_Xiu_count_B;	// anti-rust run counter for pump B
+	u32 Fang_Xiu_count_A; //20261116-5 change A 泵防锈累计秒数。
+	u32 Fang_Xiu_count_B; //20261116-5 change B 泵防锈累计秒数。
 	
 	u8 Fang_Xiu_A_Down;
 	u8 Fang_Xiu_B_Down;	
 	
 	u8 autoTimerFlag;
-	u16 Auto_timer_count;
+	u32 Auto_timer_count; //20261116-5 change 支持循环时长对应的完整秒数。
 	
 	u16 Timer_Startup_Counter;
 	u16 Pump1_Startup_Counter;

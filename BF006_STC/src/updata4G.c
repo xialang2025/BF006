@@ -1748,6 +1748,21 @@ static void bf4g_set_parameter(u8 number, u16 value) //20261116-4 add
     case 5:
         config.Set_OVERLOAD_Current2 = value;
         break;
+    case 6: //20261116-5 add 五项新计时参数直接更新，保留已累计时间。
+        config.AUTO_Timing_Run = value;
+        break;
+    case 7:
+        config.AUTO_Timing_Stop = value;
+        break;
+    case 8:
+        config.Timer_Standby_Restart = value;
+        break;
+    case 9:
+        config.Timer_Unload_Restart = value;
+        break;
+    case 10:
+        config.AUTO_FANGXIU = value;
+        break;
     case 12:
         config.Pump_AB_Mode = (u8)value;
         break;
@@ -1788,7 +1803,7 @@ static u8 bf4g_write_parameter(u8 xdata *out, u8 length) //20261116-4 add
     if (!config_loaded) {
         return bf4g_error(out, 0x0e, number);
     }
-    if (number > 5 && number != 12 && number != 19) {
+    if (number > 10 && number != 12 && number != 19) { //20261116-5 change 开放循环、故障恢复及防锈间隔。
         return bf4g_error(out, 1, number);
     }
 

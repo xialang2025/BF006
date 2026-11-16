@@ -12,7 +12,7 @@ PROJECT = TESTS.parent
 SRC = PROJECT.parent / "src"
 
 REGISTERS = ("S4CON S4BUF ACC IE2 P_SW2 T4T3M TH4 TL4 TH3 TL3 AUXINTIF EA "
-             "LowWater_M LowWater_H HighWater_M HighWater_H PUMP_ADD OverFlow_P P34").split()
+             "LowWater_M LowWater_H HighWater_M HighWater_H PUMP_ADD OverFlow_P P34 RELAY1 RELAY2 RELAY3").split()
 
 
 def run_model(model, model_byte, phases, pumps, volts):
@@ -59,12 +59,29 @@ def run_model(model, model_byte, phases, pumps, volts):
         readiness = system_source[system_source.index("static volatile bit water_inputs_ready"):
                                   system_source.index("bit sensor_sample_ready;") + 24]
         sampling = system_source[system_source.index("void Water_Level(void)"):
-                                 system_source.index("void RELAY_Auto_Control(void)")]
+                                 system_source.index("static bit cycle_pump_ready(void)")]
         scaling = system_source[system_source.index("void updatSysdata(void)"):
                                 system_source.index("void Write_Fault_Mess(")]
+        cycle = system_source[system_source.index("static bit cycle_pump_ready(void)"):
+                              system_source.index("void FanXiu_pro(void)")]
+        rust = system_source[system_source.index("void FanXiu_pro(void)"):
+                             system_source.index("\n}", system_source.index("void FanXiu_pro(void)")) + 2]
+        error_state = system_source[system_source.index("void Fault_Error_Clear("):
+                                    system_source.index("void Pump_Current_Check(")]
+        error_state = error_state.split("#if (Model_Voltage == Model_3PH)")[0]
+        fault_checks = system_source[system_source.index("u8 check_A_Fault(void)"):
+                                     system_source.index("void Set_Pump1_OverLoad_Err(")]
+        voltage_checks = system_source[system_source.index("u8 Check_UVP(void)"):
+                                       system_source.index("void LosePhase_Check(void)")]
+        recovery = system_source[system_source.index("void ReStart_Clear_Fault(void)"):
+                                 system_source.index("void zhengdingA(void)")]
+        recovery_limit = re.search(r"^#define Fault_UVP_Recovery_Time \d+", system_source, re.MULTILINE)[0]
         (directory / "sampling.c").write_text(
-            '#include "system.h"\n#include "ad.h"\nextern void Speak_Con(u8 value);\n'
-            + readiness + "\n" + scaling + sampling, encoding="utf-8"
+            '#include "system.h"\n#include "ad.h"\n'
+            'extern void Speak_Con(u8 value);\nextern void Speak_Stop(void);\n'
+            + recovery_limit + "\n"
+            + readiness + "\n" + scaling + sampling + cycle + rust + "\n"
+            + error_state + fault_checks + voltage_checks + recovery, encoding="utf-8"
         )
         runner = directory / "bf4g_uart_test.exe"
         subprocess.run(
