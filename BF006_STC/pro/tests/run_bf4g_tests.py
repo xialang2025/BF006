@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 TESTS = Path(__file__).resolve().parent
@@ -15,7 +16,8 @@ REGISTERS = ("S4CON S4BUF ACC IE2 P_SW2 T4T3M TH4 TL4 TH3 TL3 AUXINTIF EA "
              "LowWater_M LowWater_H HighWater_M HighWater_H PUMP_ADD OverFlow_P P34 RELAY1 RELAY2 RELAY3").split()
 
 
-def run_model(model, model_byte, phases, pumps, volts):
+def run_model(model, model_byte, phases, pumps, volts, bridge=False):
+    """在隔离目录构建固件回归或串口验收的模拟入口。"""
     with tempfile.TemporaryDirectory(prefix="bf006-4g-") as scratch:
         directory = Path(scratch)
         header = (PROJECT / "STC8xxxx.H").read_text(encoding="cp936")
@@ -119,7 +121,7 @@ def run_model(model, model_byte, phases, pumps, volts):
             [os.environ.get("CC", "gcc"), "-std=c99", "-Wall", "-fpack-struct=1",
              f"-DTEST_MODEL_BYTE={model_byte}", f"-DTEST_PHASES={phases}",
              f"-DTEST_PUMPS={pumps}", f"-DTEST_VOLTS={volts}",
-             "-I", str(directory), str(TESTS / "bf4g_uart_test.c"),
+             "-I", str(directory), str(TESTS / ("bf4g_serial_sim.c" if bridge else "bf4g_uart_test.c")),
              str(directory / "uart4.c"), str(directory / "updata4G.c"),
              str(directory / "sampling.c"), str(directory / "configPar.c"),
              str(directory / "contact_overload.c"), str(directory / "lcd_probe.c"), "-o", str(runner)],
@@ -128,7 +130,12 @@ def run_model(model, model_byte, phases, pumps, volts):
         subprocess.run([str(runner)], check=True)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--bridge":
+    pumps = int(sys.argv[2])
+    if pumps not in (1, 2):
+        raise SystemExit("模拟仅使用单相二百二十伏的一控一或一控二配置")
+    run_model(f"Model_1PH_220_1C{pumps}_LCD", 0xa1 + pumps, 1, pumps, 220, bridge=True)
+elif __name__ == "__main__":
     run_model("Model_1PH_220_1C1_LCD", 0xa2, 1, 1, 220)
     run_model("Model_1PH_220_1C2_LCD", 0xa3, 1, 2, 220)
     run_model("Model_3PH_220_1C1_LCD", 0xb2, 3, 1, 220)
