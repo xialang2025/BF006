@@ -166,7 +166,7 @@ static void collect_reply(u8 *out, u8 length, u8 interfere) //20261116-0 add
     u8 i;
 
     for (i = 0; i < length; i++) {
-        CHECK(uart4_sending());
+        CHECK(uart4_sending() && !(T4T3M & 0x08));
         out[i] = S4BUF;
         if (i == 2 && interfere) {
             receive_byte(0x01);
@@ -1383,6 +1383,130 @@ static void check_display_digits(void) //20261116-9 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_main_summary_length
+ * 功能描述       : 从串口接收完整主控综合应答。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_main_summary_length(void) //20261116-10 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 5, 0, 12, 0, 0, 0};
+    u8 reply[74];
+
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x85 && reply[8] == 63 && reply[9] == 0);
+    CHECK(crc(reply, sizeof(reply)) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : dashboard_fixture
+ * 功能描述       : 设置独立主控样本，覆盖有效、未就绪、不适用及异常。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void dashboard_fixture(void) //20261116-10 add
+{
+    config_loaded = 1;
+    water_status_ready = Boot_Flag = sensor_sample_ready = 1;
+    sensor_pending_tanks = 0;
+    sensor_alarm_pending = 0;
+    current_sample_ready = 1;
+    voltage_sample_ready = 0;
+    sys.Voltage_Line = 220;
+    sys.Current_A1 = 12;
+#if TEST_PHASES == 3
+    sys.Current_B1 = 34;
+    sys.Current_C1 = 56;
+#endif
+    config.Hand_Auto_timer_Flag = RUNMODE_AUTO;
+    config.Pump_AB_Mode = 1;
+    sys.Pump_A_state = sys.Pump_B_state = 1;
+    sys.Fault_Error = 0x80000001UL;
+    sys.shang_shuiwei = 2;
+    sys.xia_shuiwei = 0;
+    LCD_WATER_Hlevel1 = LCD_WATER_Hlevel6 = 1;
+    LCD_WATER_Llevel2 = LCD_WATER_Llevel4 = 1;
+    Dis7_Flash = Dis8_Flash = 0;
+    sys.SensorOut = 99990UL;
+    sys.SensorLever = 2;
+    sys.sensor_err = sys.flowover = 0;
+    sys.Sensor_OverFlow = 1;
+    config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_WATER4_20MA;
+    config.Sensor_Mode = CTROLTYPE_DRAIN;
+    config.Sensor_Rang = 9999;
+    config.Sensor_ON1 = 9000;
+    config.Sensor_STOP = 5000;
+    config.Sensor_overFlow = 9998;
+    config.OVP_Value = 500;
+    config.UVP_Value = 123;
+    config.Set_OVERLOAD_Current1 = 888;
+    config.Set_STANDBY_Current1 = 77;
+    config.AUTO_Timing_Run = 6;
+    config.AUTO_Timing_Stop = 7;
+}
+
+/******************************************************************************
+ * 函数名称       : check_main_summary_fields
+ * 功能描述       : 独立解码主控综合应答的全部项目和保留区。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_main_summary_fields(void) //20261116-10 add
+{
+    static const u8 widths[] = {
+        2, 2, 2, 2, 2, 4, 1, 1, 1, 1, 4, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+    };
+    static const u8 qualities[] = {
+        2, 0, TEST_PHASES == 3 ? 0 : 1, TEST_PHASES == 3 ? 0 : 1,
+        0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0
+    };
+    static const u32 values[] = {
+        0, 12, TEST_PHASES == 3 ? 34 : 0, TEST_PHASES == 3 ? 56 : 0,
+        TEST_PUMPS == 2 ? 0x18b6 : 0x1816, 0x80000001UL, 0x21, 0x0a, 2, 0,
+        99990UL, 10, 2, 1, 9999, 9000, 5000, 9998, 500, 123, 888, 77, 6, 7
+    };
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 5, 0x7e, 0xab, 0, 0, 0, 0};
+    u8 reply[74];
+    u8 i;
+    u8 j;
+    u8 offset = 17;
+    u32 value;
+    u8 features = (TEST_PHASES == 3 ? 1 : 0) | (TEST_PUMPS == 2 ? 2 : 0) |
+                  (TEST_VOLTS == 380 ? 4 : 0);
+
+    dashboard_fixture();
+    fill_crc(request, sizeof(request) - 1);
+    send_request(request, sizeof(request) - 1);
+    CHECK(uart4_sending());
+    sys.Fault_Error = 0;                 // 应答启动后修改业务状态，冻结的帧不变化。
+    collect_reply(reply, sizeof(reply), 1);
+    CHECK(reply[5] == 0x85 && reply[6] == 0x7e && reply[7] == 0xab);
+    CHECK(reply[8] == 63 && reply[9] == 0 && reply[10] == features);
+    for (i = 0; i < 24; i++) {
+        CHECK(((reply[11 + i / 4] >> (2 * (i % 4))) & 3) == qualities[i]);
+        value = 0;
+        for (j = 0; j < widths[i]; j++) {
+            value = (value << 8) | reply[offset++];
+        }
+        CHECK(value == values[i]);
+    }
+    CHECK(offset == 62);
+    for (i = 62; i < 72; i++) {
+        CHECK(reply[i] == 0);
+    }
+    CHECK(crc(reply, sizeof(reply)) == 0);
+    timer_expire();
+    request[8] = 1;
+    request[9] = 0xa5;
+    check_error(request, sizeof(request), 3, 0xff);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1468,6 +1592,8 @@ int main(void) //20261116-0 add
     check_control_limits();
     check_control_contact();
     check_display_digits();
+    check_main_summary_length();
+    check_main_summary_fields();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

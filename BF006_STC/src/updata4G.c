@@ -967,6 +967,7 @@ void Analyse_4G(void)
 #include "HT1622.h"
 
 #define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
+#define BF4G_PARAM_SOURCE(number) (0x80 | (number)) //20261116-10 add 紧凑布局中的参数来源标记。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
 #define BF4G_CAPABILITIES 0x001f //20261116-8 change 打开已验证的控制能力。
@@ -2007,13 +2008,106 @@ static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-8 add
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_summary_put
+ * 功能描述       : 读取单项来源并就地编码对应的质量与紧凑值。
+ * 输入参数       : qualities，质量区；entry，值位置；index，项目序号；width，值宽度；source，来源编号。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_summary_put(u8 xdata *qualities, u8 xdata *entry, u8 index,
+                             u8 width, u8 source) //20261116-10 add
+{
+    u8 quality;
+    u32 value;
+
+    if (source & 0x80) {
+        value = bf4g_param_read(source & 0x7f, &quality);
+    } else {
+        value = bf4g_run_read(source, &quality);
+    }
+    qualities[index >> 2] |= quality << ((index & 3) * 2);
+    if (width == 1) {
+        entry[0] = (u8)value;
+    } else if (width == 2) {
+        bf4g_put_u16(entry, (u16)value);
+    } else {
+        bf4g_put_u32(entry, value);
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_main_fields
+ * 功能描述       : 按紧凑布局编码主控页二十四项，复用分段读取的数据源。
+ * 输入参数       : qualities，质量区；values，紧凑值区。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_main_fields(u8 xdata *qualities, u8 xdata *values) //20261116-10 add
+{
+    // 故障、模式、传感器和水池状态均由主循环发布，组帧期间不会更新这些来源。
+    // 电压及各相电流逐项使用短临界区读取，不承诺整页同时采样。
+    bf4g_summary_put(qualities, values +  0,  0, 2, 0x01);
+    bf4g_summary_put(qualities, values +  2,  1, 2, 0x02);
+    bf4g_summary_put(qualities, values +  4,  2, 2, 0x03);
+    bf4g_summary_put(qualities, values +  6,  3, 2, 0x04);
+    bf4g_summary_put(qualities, values +  8,  4, 2, 0x08);
+    bf4g_summary_put(qualities, values + 10,  5, 4, 0x0a);
+    bf4g_summary_put(qualities, values + 14,  6, 1, 0x0c);
+    bf4g_summary_put(qualities, values + 15,  7, 1, 0x0d);
+    bf4g_summary_put(qualities, values + 16,  8, 1, 0x0e);
+    bf4g_summary_put(qualities, values + 17,  9, 1, 0x0f);
+    bf4g_summary_put(qualities, values + 18, 10, 4, 0x10);
+    bf4g_summary_put(qualities, values + 22, 11, 1, 0x11);
+    bf4g_summary_put(qualities, values + 23, 12, 1, 0x12);
+    bf4g_summary_put(qualities, values + 24, 13, 1, 0x13);
+    bf4g_summary_put(qualities, values + 25, 14, 2, BF4G_PARAM_SOURCE(14));
+    bf4g_summary_put(qualities, values + 27, 15, 2, BF4G_PARAM_SOURCE(16));
+    bf4g_summary_put(qualities, values + 29, 16, 2, BF4G_PARAM_SOURCE(15));
+    bf4g_summary_put(qualities, values + 31, 17, 2, BF4G_PARAM_SOURCE(20));
+    bf4g_summary_put(qualities, values + 33, 18, 2, BF4G_PARAM_SOURCE(0));
+    bf4g_summary_put(qualities, values + 35, 19, 2, BF4G_PARAM_SOURCE(1));
+    bf4g_summary_put(qualities, values + 37, 20, 2, BF4G_PARAM_SOURCE(3));
+    bf4g_summary_put(qualities, values + 39, 21, 2, BF4G_PARAM_SOURCE(2));
+    bf4g_summary_put(qualities, values + 41, 22, 2, BF4G_PARAM_SOURCE(6));
+    bf4g_summary_put(qualities, values + 43, 23, 2, BF4G_PARAM_SOURCE(7));
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_read_main
+ * 功能描述       : 组装主控综合应答，清零质量区和扩展保留区。
+ * 输入参数       : out，应答数据位置；length，请求数据长度。
+ * 返回值         : 应答数据长度。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_read_main(u8 xdata *out, u8 length) //20261116-10 add
+{
+    u8 i;
+
+    if (length != 0) {
+        return bf4g_error(out, 3, 0xff);
+    }
+    out[0] = 0;
+    out[1] = (Model_Voltage == Model_3PH ? 1 : 0) |
+             (Model_OUT == Model_1C2 ? 2 : 0) |
+             (VoltageValue == Vol_380 ? 4 : 0);
+    for (i = 2; i < 8; i++) {
+        out[i] = 0;
+    }
+    bf4g_main_fields(out + 2, out + 8);
+    for (i = 53; i < 63; i++) {
+        out[i] = 0;                 // 每次发送前在共享帧内覆盖保留字节。
+    }
+    return 63;
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_reply
  * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
  * 输入参数       : frame，共享报文缓冲；length，实收字节数。
  * 返回值         : 应答字节数，静默丢弃为零。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-8 change
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-10 change
 {
     u8 xdata *out;
     u8 data_length;
@@ -2056,6 +2150,9 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-8 change
             break;
         case 4:
             data_length = bf4g_read_history(out, data_length);
+            break;
+        case 5:
+            data_length = bf4g_read_main(out, data_length);
             break;
         case 0x10:
             data_length = bf4g_write_parameter(out, data_length);

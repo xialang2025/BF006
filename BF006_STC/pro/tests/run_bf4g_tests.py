@@ -123,5 +123,7 @@ def run_model(model, model_byte, phases, pumps, volts):
 if __name__ == "__main__":
     run_model("Model_1PH_220_1C1_LCD", 0xa2, 1, 1, 220)
     run_model("Model_1PH_220_1C2_LCD", 0xa3, 1, 2, 220)
+    run_model("Model_3PH_220_1C1_LCD", 0xb2, 3, 1, 220)
+    run_model("Model_3PH_220_1C2_LCD", 0xb2, 3, 2, 220)
     run_model("Model_3PH_380_1C1_LCD", 0xb2, 3, 1, 380)
     run_model("Model_3PH_380_1C2_LCD", 0xb3, 3, 2, 380)
