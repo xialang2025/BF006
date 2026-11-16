@@ -80,9 +80,7 @@ void main(void)
 
             Display_Update();
             Beep();
-            if (!uart4_sending()) { //20261116-0 add 等最后一个停止位结束才允许写入片内存储。
-                save_pro();
-            }
+            save_pro(); //20261116-4 change 保存入口统一检查串口四的发送状态。
 			P54 = 0;
         }
 

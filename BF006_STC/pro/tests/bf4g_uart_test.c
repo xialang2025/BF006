@@ -8,8 +8,10 @@
 #include "HT1622.h"
 
 u8 S4CON, S4BUF, ACC, IE2, P_SW2, T4T3M, TH4, TL4, TH3, TL3, AUXINTIF, EA;
-config_t config;
-bit config_loaded;
+u16 Limit_Current;
+const u16 Value_OVP = 480;
+static u8 flash[117];
+static u8 flash_writes;
 sys_t sys;
 bit Boot_Flag;
 u8 LowWater_M, LowWater_H, HighWater_M, HighWater_H, PUMP_ADD, OverFlow_P, P34;
@@ -37,6 +39,47 @@ void Speak_Con(u8 value) //20261116-2 add
 }
 
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "%d: %s\n", __LINE__, #expr); exit(1); } } while (0)
+
+/******************************************************************************
+ * 函数名称       : EEPROM_read_n
+ * 功能描述       : 从模拟数据区读取原参数副本。
+ * 输入参数       : address，逻辑地址；out，目标；length，字节数。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void EEPROM_read_n(u16 address, u8 *out, u16 length) //20261116-4 add
+{
+    CHECK(address == 0 && length == sizeof(flash));
+    memcpy(out, flash, length);
+}
+
+/******************************************************************************
+ * 函数名称       : EEPROM_SectorErase
+ * 功能描述       : 在测试中模拟参数区整扇区擦除。
+ * 输入参数       : address，逻辑地址。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void EEPROM_SectorErase(u16 address) //20261116-4 add
+{
+    CHECK(address == 0);
+    memset(flash, 0xff, sizeof(flash));
+}
+
+/******************************************************************************
+ * 函数名称       : EEPROM_write_n
+ * 功能描述       : 将参数副本写入模拟数据区。
+ * 输入参数       : address，逻辑地址；source，参数副本；length，字节数。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void EEPROM_write_n(u16 address, u8 *source, u16 length) //20261116-4 add
+{
+    CHECK(address == 0 && length == sizeof(flash));
+    CHECK(flash[0] == 0xff && flash[sizeof(flash) - 1] == 0xff);
+    memcpy(flash, source, length);
+    flash_writes++;
+}
 
 static const u8 info_request[] = {0x01, 0x43, 0xbf, 0x06, 0x03, 0x01,
                                   0x00, 0x01, 0x00, 0x49, 0x84};
@@ -185,16 +228,16 @@ static void check_info(u8 interfere) //20261116-0 add
 }
 
 /******************************************************************************
- * 函数名称       : check_error
+ * 函数名称       : check_error_range
  * 功能描述       : 核对错误应答合同和请求回显。
- * 输入参数       : request，请求；length，长度；status，预期错误码；object，预期目标。
+ * 输入参数       : request，请求；length，长度；status，预期错误码；object，预期目标；minimum／maximum，范围。
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-static void check_error(u8 *request, u8 length, u8 status, u8 object) //20261116-1 change
+static void check_error_range(u8 *request, u8 length, u8 status, u8 object,
+                              u16 minimum, u16 maximum) //20261116-4 change
 {
     u8 reply[21];
-    u8 i;
 
     fill_crc(request, length);
     send_request(request, length);
@@ -203,10 +246,23 @@ static void check_error(u8 *request, u8 length, u8 status, u8 object) //20261116
     CHECK(reply[4] == 3 && reply[5] == (request[5] | 0x80));
     CHECK(reply[6] == request[6] && reply[7] == request[7]);
     CHECK(reply[8] == 10 && reply[9] == status && reply[10] == object);
-    for (i = 11; i < 19; i++) {
-        CHECK(reply[i] == 0);
-    }
+    CHECK(reply[11] == 0 && reply[12] == 0);
+    CHECK(((u16)reply[13] << 8 | reply[14]) == minimum);
+    CHECK(reply[15] == 0 && reply[16] == 0);
+    CHECK(((u16)reply[17] << 8 | reply[18]) == maximum);
     CHECK(crc(reply, sizeof(reply)) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : check_error
+ * 功能描述       : 核对不携带取值范围的错误应答。
+ * 输入参数       : request，请求；length，长度；status，错误码；object，目标。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_error(u8 *request, u8 length, u8 status, u8 object) //20261116-4 add
+{
+    check_error_range(request, length, status, object, 0, 0);
 }
 
 /******************************************************************************
@@ -610,6 +666,151 @@ static void check_history(void) //20261116-3 add
 }
 
 /******************************************************************************
+ * 函数名称       : write_parameter_request
+ * 功能描述       : 发出单写参数请求并核对成功应答。
+ * 输入参数       : number，参数；value，期望的新参数值。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void write_parameter_request(u8 number, u16 value) //20261116-4 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0x12, 0x34, 3, number, value >> 8, value, 0, 0};
+    u8 reply[15];
+
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x90 && reply[6] == 0x12 && reply[7] == 0x34);
+    CHECK(reply[8] == 4 && reply[9] == 0 && reply[10] == number);
+    CHECK(((u16)reply[11] << 8 | reply[12]) == value);
+    CHECK(crc(reply, sizeof(reply)) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : check_parameter_writes
+ * 功能描述       : 验证合法赋值、模式独立性、非法参数和边界。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_parameter_writes(void) //20261116-4 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0, 9, 3, 3, 3, 0x85, 0, 0};
+    config_t expected;
+    u8 mode;
+    const u16 voltage_limit = TEST_VOLTS == 380 ? 480 : 280;
+
+    memcpy(&expected, &config, sizeof(expected));
+    write_parameter_request(0, voltage_limit);
+    write_parameter_request(1, 85);
+    write_parameter_request(2, 0);
+    expected.OVP_Value = voltage_limit;
+    expected.UVP_Value = 85;
+    expected.Set_STANDBY_Current1 = 0;
+    if (TEST_PUMPS == 2) {
+        write_parameter_request(4, 901 - 1);
+        write_parameter_request(5, 500);
+        write_parameter_request(12, 2);
+        expected.Set_STANDBY_Current2 = 900;
+        expected.Set_OVERLOAD_Current2 = 500;
+        expected.Pump_AB_Mode = 2;
+    }
+    for (mode = 0; mode < 3; mode++) {
+        sys.Pump_A_state = mode != 1;
+        config.Hand_Auto_timer_Flag = mode;
+        write_parameter_request(3, 898 + mode);
+        write_parameter_request(19, mode + 1);
+        expected.Hand_Auto_timer_Flag = mode;
+        expected.Set_OVERLOAD_Current1 = 898 + mode;
+        expected.fault_mask = mode + 1;
+        CHECK(memcmp(&config, &expected, sizeof(config)) == 0);
+    }
+    CHECK(sys.save_flag == 1);
+    sys.save_flag = 0;
+    write_parameter_request(3, 900);
+    CHECK(sys.save_flag == 0);
+    check_error_range(request, sizeof(request), 7, 3, 0, 900);
+    request[9] = 0;
+    check_error_range(request, sizeof(request), 7, 0, 85, voltage_limit);
+    request[9] = 19;
+    request[10] = 1;
+    request[11] = 0;
+    check_error_range(request, sizeof(request), 7, 19, 0, 4);
+    if (TEST_PUMPS == 1) {
+        request[9] = 4;
+        check_error(request, sizeof(request), 6, 4);
+        request[9] = 12;
+        check_error(request, sizeof(request), 6, 12);
+    } else {
+        request[9] = 12;
+        check_error_range(request, sizeof(request), 7, 12, 0, 2);
+    }
+    request[9] = 21;
+    check_error(request, sizeof(request), 5, 21);
+    request[9] = 22;
+    check_error(request, sizeof(request), 5, 22);
+    request[9] = 23;
+    check_error(request, sizeof(request), 4, 23);
+    request[9] = 19;
+    config_loaded = 0;
+    check_error(request, sizeof(request), 0x0e, 19);
+    config_loaded = 1;
+    CHECK(sys.save_flag == 0 && memcmp(&config, &expected, sizeof(config)) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : check_parameter_save
+ * 功能描述       : 经原保存入口验证停止位避让、节流合并及重新装载。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_parameter_save(void) //20261116-4 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0, 10, 3, 3, 3, 0x83, 0, 0};
+    static const u16 written[] = {899};
+    static const u8 valid[] = {0};
+    u16 i;
+
+    CHECK(sizeof(config_t) == 117);
+    config.banben = 18;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    CHECK(config.Set_OVERLOAD_Current1 == 899 && sys.save_flag == 1);
+    for (i = 0; i < 15; i++) {
+        CHECK(uart4_sending());
+        save_pro();
+        CHECK(flash_writes == 0);
+        S4CON |= 2;
+        UART4_int();
+    }
+    CHECK(uart4_sending());
+    save_pro();
+    CHECK(flash_writes == 0);
+    timer_expire();
+    save_pro();
+    CHECK(flash_writes == 1 && sys.save_flag == 0);
+
+    config.Set_OVERLOAD_Current1 = 0;
+    Par_Init();
+    CHECK(config.Set_OVERLOAD_Current1 == 899);
+    read_parameters(3, 1, written, valid);
+    write_parameter_request(3, 888);
+    save_pro();
+    write_parameter_request(19, 4);
+    save_pro();
+    CHECK(flash_writes == 1 && sys.save_flag == 1);
+    for (i = 0; i < 199; i++) {
+        save_pro();
+    }
+    CHECK(flash_writes == 2 && sys.save_flag == 0);
+    config.Set_OVERLOAD_Current1 = 0;
+    config.fault_mask = 0;
+    Par_Init();
+    CHECK(config.Set_OVERLOAD_Current1 == 888 && config.fault_mask == 4);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -683,6 +884,8 @@ int main(void) //20261116-0 add
     check_runtime_fields();
     check_sensor_sample();
     check_history();
+    check_parameter_writes();
+    check_parameter_save();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

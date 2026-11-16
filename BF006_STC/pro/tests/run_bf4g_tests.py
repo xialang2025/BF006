@@ -44,12 +44,14 @@ def run_model(model, model_byte, phases, pumps, volts):
         (directory / "system.h").write_text(
             '#ifndef TEST_SYSTEM_H\n#define TEST_SYSTEM_H\n#include "config.h"\n'
             + definitions + '\nextern sys_t sys;\nextern bit Boot_Flag;\n'
-            'extern bit water_status_ready, sensor_sample_ready;\n'
+            'extern bit water_status_ready, sensor_sample_ready;\nvoid updatSysdata(void);\n'
             '#include "configPar.h"\n#endif\n', encoding="utf-8"
         )
-        for name in ("uart4.h", "configPar.h", "Modbus_New.h", "Modbus.h", "ad.h", "Display.h", "HT1622.h"):
+        for name in ("uart4.h", "configPar.h", "Modbus_New.h", "Modbus.h", "ad.h", "Display.h", "HT1622.h", "user.h"):
             shutil.copyfile(SRC / name, directory / name)
-        for name, encoding in (("uart4.c", "cp936"), ("updata4G.c", "utf-8")):
+        shutil.copyfile(SRC / "EEPROM.h", directory / "eeprom.h")
+        for name, encoding in (("uart4.c", "cp936"), ("updata4G.c", "utf-8"),
+                               ("configPar.c", "utf-8")):
             source = (SRC / name).read_text(encoding=encoding)
             source = re.sub(r"\binterrupt\s+\w+", "", source)
             (directory / name).write_text(source, encoding="utf-8")
@@ -58,18 +60,20 @@ def run_model(model, model_byte, phases, pumps, volts):
                                   system_source.index("bit sensor_sample_ready;") + 24]
         sampling = system_source[system_source.index("void Water_Level(void)"):
                                  system_source.index("void RELAY_Auto_Control(void)")]
+        scaling = system_source[system_source.index("void updatSysdata(void)"):
+                                system_source.index("void Write_Fault_Mess(")]
         (directory / "sampling.c").write_text(
             '#include "system.h"\n#include "ad.h"\nextern void Speak_Con(u8 value);\n'
-            + readiness + "\n" + sampling, encoding="utf-8"
+            + readiness + "\n" + scaling + sampling, encoding="utf-8"
         )
         runner = directory / "bf4g_uart_test.exe"
         subprocess.run(
-            [os.environ.get("CC", "gcc"), "-std=c99", "-Wall",
+            [os.environ.get("CC", "gcc"), "-std=c99", "-Wall", "-fpack-struct=1",
              f"-DTEST_MODEL_BYTE={model_byte}", f"-DTEST_PHASES={phases}",
              f"-DTEST_PUMPS={pumps}", f"-DTEST_VOLTS={volts}",
              "-I", str(directory), str(TESTS / "bf4g_uart_test.c"),
              str(directory / "uart4.c"), str(directory / "updata4G.c"),
-             str(directory / "sampling.c"), "-o", str(runner)],
+             str(directory / "sampling.c"), str(directory / "configPar.c"), "-o", str(runner)],
             check=True,
         )
         subprocess.run([str(runner)], check=True)

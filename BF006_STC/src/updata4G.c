@@ -1721,13 +1721,109 @@ static u8 bf4g_read_history(u8 xdata *out, u8 length) //20261116-3 add
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_set_parameter
+ * 功能描述       : 只给通过校验的单个参数赋值。
+ * 输入参数       : number，参数号；value，已经校验的新值。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_set_parameter(u8 number, u16 value) //20261116-4 add
+{
+    switch (number) {
+    case 0:
+        config.OVP_Value = value;
+        break;
+    case 1:
+        config.UVP_Value = value;
+        break;
+    case 2:
+        config.Set_STANDBY_Current1 = value;
+        break;
+    case 3:
+        config.Set_OVERLOAD_Current1 = value;
+        break;
+    case 4:
+        config.Set_STANDBY_Current2 = value;
+        break;
+    case 5:
+        config.Set_OVERLOAD_Current2 = value;
+        break;
+    case 12:
+        config.Pump_AB_Mode = (u8)value;
+        break;
+    case 19:
+        config.fault_mask = (u8)value;
+        break;
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_write_parameter
+ * 功能描述       : 校验单写请求，发布目标参数并返回当前内存值。
+ * 输入参数       : out，请求及应答数据位置；length，请求数据长度。
+ * 返回值         : 应答数据长度。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_write_parameter(u8 xdata *out, u8 length) //20261116-4 add
+{
+    u8 number;
+    u16 value;
+    u16 minimum;
+    u16 maximum;
+    bit interrupts;
+
+    if (length != 3) {
+        return bf4g_error(out, 3, length ? out[0] : 0xff);
+    }
+    number = out[0];
+    if (number >= 23) {
+        return bf4g_error(out, 4, number);
+    }
+    if (number >= 21) {
+        return bf4g_error(out, 5, number);
+    }
+    if (!bf4g_param_applicable(number)) {
+        return bf4g_error(out, 6, number);
+    }
+    if (!config_loaded) {
+        return bf4g_error(out, 0x0e, number);
+    }
+    if (number > 5 && number != 12 && number != 19) {
+        return bf4g_error(out, 1, number);
+    }
+
+    value = ((u16)out[1] << 8) | out[2];
+    minimum = bf4g_param_minimum(number);
+    maximum = bf4g_param_maximum(number);
+    if (value < minimum || value > maximum) {
+        bf4g_error(out, 7, number);
+        bf4g_put_u32(out + 2, minimum);
+        bf4g_put_u32(out + 6, maximum);
+        return 10;
+    }
+
+    if (value != bf4g_param_value(number)) {
+        // 在一次短临界区发布单个参数及其保存标志。
+        interrupts = EA;
+        EA = 0;
+        bf4g_set_parameter(number, value);
+        sys.save_flag = 1;
+        EA = interrupts;
+    }
+    out[0] = 0;
+    out[1] = number;
+    bf4g_put_u16(out + 2, bf4g_param_value(number));
+    return 4;
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_reply
  * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
  * 输入参数       : frame，共享报文缓冲；length，实收字节数。
  * 返回值         : 应答字节数，静默丢弃为零。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-3 change
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-4 change
 {
     u8 xdata *out;
     u8 data_length;
@@ -1748,7 +1844,7 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-3 change
         }
         data_length = bf4g_error(out, 2, 0xff);
     } else if (data_length != length - BF4G_OVERHEAD || (frame[6] | frame[7]) == 0) {
-        object = frame[5] >= 2 && frame[5] <= 4 && data_length &&
+        object = ((frame[5] >= 2 && frame[5] <= 4) || frame[5] == 0x10) && data_length &&
                  length > BF4G_OVERHEAD ? out[0] : 0xff;
         data_length = bf4g_error(out, 3, object);
     } else {
@@ -1769,6 +1865,9 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-3 change
             break;
         case 4:
             data_length = bf4g_read_history(out, data_length);
+            break;
+        case 0x10:
+            data_length = bf4g_write_parameter(out, data_length);
             break;
         default:
             data_length = bf4g_error(out, 1, 0xff);
