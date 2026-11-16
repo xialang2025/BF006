@@ -41,7 +41,7 @@ void main(void)
         Modbus_analysis();
 #endif
 
-        //20261113-0 del 封存旧协议的接收解析入口：Analyse_4G();
+        uart4_service(); //20261116-0 add 解析静默完成的串口四报文。
 
         //模拟量采集
 //		MEASURE_Pro();
@@ -80,7 +80,9 @@ void main(void)
 
             Display_Update();
             Beep();
-            save_pro();
+            if (!uart4_sending()) { //20261116-0 add 等最后一个停止位结束才允许写入片内存储。
+                save_pro();
+            }
 			P54 = 0;
         }
 

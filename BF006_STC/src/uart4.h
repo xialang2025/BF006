@@ -3,7 +3,12 @@
 
 #include	"config.h"
 
-void uart_init(void); //20261113-0 change 保留串口四硬件初始化接口
+#define BF4G_FRAME_MAX 97 //20261116-0 add 串口四共享帧的最大字节数。
+
+void uart_init(void);
+void uart4_service(void);
+bit uart4_sending(void);
+u8 bf4g_reply(u8 xdata *frame, u8 length);
 
 #if 0 //20261113-0 del 封存旧协议的串口缓冲区、计数和收发接口声明。
 #define	COM_TX4_Lenth	512

@@ -958,3 +958,157 @@ void Analyse_4G(void)
     }
 }
 #endif
+
+#include "uart4.h"
+#include "system.h"
+#include "Modbus_New.h"
+
+#define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
+#define BF4G_DATA         9
+#define BF4G_OVERHEAD     11
+#define BF4G_CAPABILITIES 0
+
+/******************************************************************************
+ * 函数名称       : bf4g_crc
+ * 功能描述       : 计算从地址开始的反射循环冗余校验值。
+ * 输入参数       : frame，报文起始位置；length，参与计算的字节数。
+ * 返回值         : 校验值。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_crc(const u8 xdata *frame, u8 length) //20261116-0 add
+{
+    u16 crc = 0xffff;
+    u8 i;
+    u8 n;
+
+    for (i = 0; i < length; i++) {
+        crc ^= frame[i];
+        for (n = 0; n < 8; n++) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ 0xa001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_put_u16
+ * 功能描述       : 将十六位数据按高字节在前写入应答。
+ * 输入参数       : out，写入位置；value，要写入的值。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_put_u16(u8 xdata *out, u16 value) //20261116-0 add
+{
+    out[0] = value >> 8;
+    out[1] = value;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_model_word
+ * 功能描述       : 按当前过载设置生成兼容显示用的旧型号字。
+ * 输入参数       : None
+ * 返回值         : 由旧机型宏和规格码组成的型号字。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 bf4g_model_word(void) //20261116-0 add
+{
+    u8 spec = 0x93;
+
+    switch (config.Set_OVERLOAD_Current1) {
+    case V1_Set_Current:
+        spec = 0x90;
+        break;
+    case V2_Set_Current:
+        spec = 0x91;
+        break;
+    case V3_Set_Current:
+        spec = 0x92;
+        break;
+    }
+    return ((u16)Dev_Model << 8) | spec;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_device_info
+ * 功能描述       : 编码设备信息，相数、泵数和额定电压由编译机型确定。
+ * 输入参数       : out，应答的数据起始位置。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_device_info(u8 xdata *out) //20261116-0 add
+{
+    out[0] = 0;
+    out[1] = 0;
+    bf4g_put_u16(out + 2, bf4g_model_word());
+    bf4g_put_u16(out + 4, MODBUS_NEW_VERSION);
+    out[6] = Model_Voltage == Model_1PH ? 1 : 3;
+    out[7] = Model_OUT == Model_1C1 ? 1 : 2;
+    bf4g_put_u16(out + 8, VoltageValue == Vol_380 ? 380 : 220);
+    bf4g_put_u16(out + 10, BF4G_CAPABILITIES);
+    out[12] = BF4G_FRAME_MAX;
+    out[13] = 16;
+    out[14] = 9;
+    out[15] = 8;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_reply
+ * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
+ * 输入参数       : frame，共享报文缓冲；length，实收字节数。
+ * 返回值         : 应答字节数，静默丢弃为零。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-0 add
+{
+    u8 status;
+    u8 data_length;
+    u8 i;
+    u16 crc;
+
+    if (length < BF4G_OVERHEAD || frame[1] != 0x43 ||
+        frame[2] != 0xbf || frame[3] != 0x06 || (frame[5] & 0x80) ||
+        bf4g_crc(frame, length) != 0) {
+        return 0;                         // 头或边界无法确认时静默丢弃。
+    }
+
+    data_length = frame[8];
+    if (frame[4] != BF4G_FMT) {
+        if (data_length != length - BF4G_OVERHEAD) {
+            return 0;                    // 异格式只应答能按公共头辨认的帧。
+        }
+        status = 0x02;
+    } else if (data_length != length - BF4G_OVERHEAD || (frame[6] | frame[7]) == 0) {
+        status = 0x03;
+    } else if (frame[5] != 0x01) {
+        status = 0x01;
+    } else if (data_length != 0) {
+        status = 0x03;
+    } else {
+        status = 0;
+    }
+
+    if (status == 0) {
+        bf4g_device_info(frame + BF4G_DATA);
+        data_length = 16;
+    } else {
+        frame[BF4G_DATA] = status;
+        frame[BF4G_DATA + 1] = 0xff;
+        for (i = 2; i < 10; i++) {
+            frame[BF4G_DATA + i] = 0;     // 公共结构错误不携带范围上下限。
+        }
+        data_length = 10;
+    }
+
+    frame[4] = BF4G_FMT;
+    frame[5] |= 0x80;
+    frame[8] = data_length;
+    length = BF4G_DATA + data_length;
+    crc = bf4g_crc(frame, length);
+    frame[length++] = crc;
+    frame[length++] = crc >> 8;
+    return length;
+}
