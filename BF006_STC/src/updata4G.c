@@ -1336,18 +1336,39 @@ static u8 bf4g_tank_quality(void) //20261116-6 change
     return (sys.shang_shuiwei > 2 || sys.xia_shuiwei > 2) ? 3 : 0;
 }
 
+typedef struct {
+    u32 faults;
+    u8 mode;
+} bf4g_diagnostics_t; //20261116-12 add 只暂存遥控中断也能更新的诊断来源。
+
+/******************************************************************************
+ * 函数名称       : bf4g_capture_diagnostics
+ * 功能描述       : 一次读取遥控中断可能更新的模式和故障位图。
+ * 输入参数       : snapshot，局部诊断数据位置。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void bf4g_capture_diagnostics(bf4g_diagnostics_t xdata *snapshot) //20261116-12 add
+{
+    bit interrupts = EA;
+
+    EA = 0;
+    snapshot->mode = config.Hand_Auto_timer_Flag;
+    snapshot->faults = sys.Fault_Error;
+    EA = interrupts;
+}
+
 /******************************************************************************
  * 函数名称       : bf4g_run_status
  * 功能描述       : 编制模式、运行、主备和两水池档位的状态位。
- * 输入参数       : quality，质量输出位置。
+ * 输入参数       : mode，已捕获的模式；quality，质量输出位置。
  * 返回值         : 运行状态位图。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u16 bf4g_run_status(u8 *quality) //20261116-8 change
+static u16 bf4g_run_status(u8 mode, u8 *quality) //20261116-12 change
 {
     static const u8 code mode_bits[] = {1, 6, 10};
     u16 state = 0;
-    u8 mode = config.Hand_Auto_timer_Flag;
     u8 tanks = bf4g_tank_quality();
 #if (Model_OUT == Model_1C2)
     u8 priority = config.Pump_AB_Mode;
@@ -1489,11 +1510,12 @@ static u32 bf4g_sensor_read(u8 number, u8 *quality) //20261116-6 change
 /******************************************************************************
  * 函数名称       : bf4g_run_read
  * 功能描述       : 按运行字段号读取其值和对应质量。
- * 输入参数       : number，已经校验的字段号；quality，质量输出位置。
+ * 输入参数       : number，字段号；quality，质量输出位置；snapshot，本次诊断来源。
  * 返回值         : 无效值为零，异常故障位图保留原值。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
+static u32 bf4g_run_read(u8 number, u8 *quality,
+                         const bf4g_diagnostics_t xdata *snapshot) //20261116-12 change
 {
     const u16 xdata *measurement;
     u32 faults;
@@ -1544,7 +1566,7 @@ static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
 
     switch (number) {
     case 0x08:
-        status = bf4g_run_status(quality);
+        status = bf4g_run_status(snapshot->mode, quality);
         return *quality ? 0 : status; //20261116-8 change 带质量的监测项在异常时传零。
     case 0x09:
     case 0x0a:
@@ -1555,7 +1577,7 @@ static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
                 return 0;
             }
         }
-        faults = sys.Fault_Error;
+        faults = snapshot->faults;
         if (!bf4g_fault_valid(faults)) {
             *quality = 3;
             return number == 0x0a ? faults : 0;
@@ -1642,13 +1664,14 @@ static void bf4g_put_u32(u8 xdata *out, u32 value) //20261116-2 add
  * 返回值         : 应答数据长度。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u8 bf4g_read_runtime(u8 xdata *out, u8 length) //20261116-2 add
+static u8 bf4g_read_runtime(u8 xdata *out, u8 length) //20261116-12 change
 {
     u8 start;
     u8 count;
     u8 i;
     u8 quality;
     u32 value;
+    bf4g_diagnostics_t xdata snapshot;
 
     if (length != 2) {
         return bf4g_error(out, 3, length ? out[0] : 0xff);
@@ -1665,8 +1688,9 @@ static u8 bf4g_read_runtime(u8 xdata *out, u8 length) //20261116-2 add
     out[0] = 0;
     out[1] = start;
     out[2] = count;
+    bf4g_capture_diagnostics(&snapshot);
     for (i = 0; i < count; i++) {
-        value = bf4g_run_read(start + i, &quality);
+        value = bf4g_run_read(start + i, &quality, &snapshot);
         out[3 + i * 5] = quality;
         bf4g_put_u32(out + 4 + i * 5, value);
     }
@@ -1931,7 +1955,7 @@ static bit bf4g_start_blocked(u8 target) //20261116-8 add
  * 返回值         : 应答数据长度。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-8 add
+static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-12 change
 {
     u8 action;
     u8 target;
@@ -1939,6 +1963,7 @@ static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-8 add
     u8 mode;
     u8 quality;
     bit interrupts;
+    bf4g_diagnostics_t xdata snapshot;
 
     if (length != 2) {
         return bf4g_error(out, 3, length ? out[0] : 0xff);
@@ -1961,12 +1986,12 @@ static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-8 add
         }
         pumps = 1;                   // 一控一的全部目标等同于唯一水泵。
 #endif
-        if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
-            return bf4g_error(out, 8, action);
-        }
-
         interrupts = EA;
         EA = 0;
+        if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
+            EA = interrupts;
+            return bf4g_error(out, 8, action);
+        }
         if (action == 1 && bf4g_start_blocked(pumps)) {
             EA = interrupts;
             return bf4g_error(out, 9, action);
@@ -1982,13 +2007,18 @@ static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-8 add
 #endif
         EA = interrupts;
     } else if (action == 6) {
+        interrupts = EA;
+        EA = 0;                      // 同一故障清除例程也由遥控中断调用。
         clear_A_Fault();
 #if (Model_OUT == Model_1C2)
         clear_B_Fault();
 #endif
         Contact_Overload_Control(); // 持续输入及刚确认的触点状态仍应锁存。
+        EA = interrupts;
     } else {
         mode = action - 3;
+        interrupts = EA;
+        EA = 0;
         if (config.Hand_Auto_timer_Flag != mode) {
             config.Hand_Auto_timer_Flag = mode;
             if (mode == RUNMODE_TIMER) {
@@ -1997,25 +2027,28 @@ static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-8 add
             }
             sys.save_flag = 1;
         }
+        EA = interrupts;
     }
 
+    bf4g_capture_diagnostics(&snapshot);
     out[0] = 0;
     out[1] = action;
     out[2] = target;
-    bf4g_put_u16(out + 3, bf4g_run_status(&quality));
-    bf4g_put_u32(out + 5, sys.Fault_Error);
+    bf4g_put_u16(out + 3, bf4g_run_status(snapshot.mode, &quality));
+    bf4g_put_u32(out + 5, snapshot.faults);
     return 9;
 }
 
 /******************************************************************************
  * 函数名称       : bf4g_summary_put
  * 功能描述       : 读取单项来源并就地编码对应的质量与紧凑值。
- * 输入参数       : qualities，质量区；entry，值位置；index，项目序号；width，值宽度；source，来源编号。
+ * 输入参数       : qualities，质量区；entry，值位置；index，项目序号；width，值宽度；source，来源编号；snapshot，本次诊断来源。
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
 static void bf4g_summary_put(u8 xdata *qualities, u8 xdata *entry, u8 index,
-                             u8 width, u8 source) //20261116-10 add
+                             u8 width, u8 source,
+                             const bf4g_diagnostics_t xdata *snapshot) //20261116-12 change
 {
     u8 quality;
     u32 value;
@@ -2023,7 +2056,7 @@ static void bf4g_summary_put(u8 xdata *qualities, u8 xdata *entry, u8 index,
     if (source & 0x80) {
         value = bf4g_param_read(source & 0x7f, &quality);
     } else {
-        value = bf4g_run_read(source, &quality);
+        value = bf4g_run_read(source, &quality, snapshot);
     }
     qualities[index >> 2] |= quality << ((index & 3) * 2);
     if (width == 1) {
@@ -2038,38 +2071,39 @@ static void bf4g_summary_put(u8 xdata *qualities, u8 xdata *entry, u8 index,
 /******************************************************************************
  * 函数名称       : bf4g_main_fields
  * 功能描述       : 按紧凑布局编码主控页二十四项，复用分段读取的数据源。
- * 输入参数       : qualities，质量区；values，紧凑值区。
+ * 输入参数       : qualities，质量区；values，紧凑值区；snapshot，本次诊断来源。
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-static void bf4g_main_fields(u8 xdata *qualities, u8 xdata *values) //20261116-10 add
+static void bf4g_main_fields(u8 xdata *qualities, u8 xdata *values,
+                             const bf4g_diagnostics_t xdata *snapshot) //20261116-12 change
 {
-    // 故障、模式、传感器和水池状态均由主循环发布，组帧期间不会更新这些来源。
-    // 电压及各相电流逐项使用短临界区读取，不承诺整页同时采样。
-    bf4g_summary_put(qualities, values +  0,  0, 2, 0x01);
-    bf4g_summary_put(qualities, values +  2,  1, 2, 0x02);
-    bf4g_summary_put(qualities, values +  4,  2, 2, 0x03);
-    bf4g_summary_put(qualities, values +  6,  3, 2, 0x04);
-    bf4g_summary_put(qualities, values +  8,  4, 2, 0x08);
-    bf4g_summary_put(qualities, values + 10,  5, 4, 0x0a);
-    bf4g_summary_put(qualities, values + 14,  6, 1, 0x0c);
-    bf4g_summary_put(qualities, values + 15,  7, 1, 0x0d);
-    bf4g_summary_put(qualities, values + 16,  8, 1, 0x0e);
-    bf4g_summary_put(qualities, values + 17,  9, 1, 0x0f);
-    bf4g_summary_put(qualities, values + 18, 10, 4, 0x10);
-    bf4g_summary_put(qualities, values + 22, 11, 1, 0x11);
-    bf4g_summary_put(qualities, values + 23, 12, 1, 0x12);
-    bf4g_summary_put(qualities, values + 24, 13, 1, 0x13);
-    bf4g_summary_put(qualities, values + 25, 14, 2, BF4G_PARAM_SOURCE(14));
-    bf4g_summary_put(qualities, values + 27, 15, 2, BF4G_PARAM_SOURCE(16));
-    bf4g_summary_put(qualities, values + 29, 16, 2, BF4G_PARAM_SOURCE(15));
-    bf4g_summary_put(qualities, values + 31, 17, 2, BF4G_PARAM_SOURCE(20));
-    bf4g_summary_put(qualities, values + 33, 18, 2, BF4G_PARAM_SOURCE(0));
-    bf4g_summary_put(qualities, values + 35, 19, 2, BF4G_PARAM_SOURCE(1));
-    bf4g_summary_put(qualities, values + 37, 20, 2, BF4G_PARAM_SOURCE(3));
-    bf4g_summary_put(qualities, values + 39, 21, 2, BF4G_PARAM_SOURCE(2));
-    bf4g_summary_put(qualities, values + 41, 22, 2, BF4G_PARAM_SOURCE(6));
-    bf4g_summary_put(qualities, values + 43, 23, 2, BF4G_PARAM_SOURCE(7));
+    // 组帧复用本次捕获的故障和模式；其他关联状态在主循环中保持一致。
+    // 电压及各相电流分别读取。
+    bf4g_summary_put(qualities, values +  0,  0, 2, 0x01, snapshot);
+    bf4g_summary_put(qualities, values +  2,  1, 2, 0x02, snapshot);
+    bf4g_summary_put(qualities, values +  4,  2, 2, 0x03, snapshot);
+    bf4g_summary_put(qualities, values +  6,  3, 2, 0x04, snapshot);
+    bf4g_summary_put(qualities, values +  8,  4, 2, 0x08, snapshot);
+    bf4g_summary_put(qualities, values + 10,  5, 4, 0x0a, snapshot);
+    bf4g_summary_put(qualities, values + 14,  6, 1, 0x0c, snapshot);
+    bf4g_summary_put(qualities, values + 15,  7, 1, 0x0d, snapshot);
+    bf4g_summary_put(qualities, values + 16,  8, 1, 0x0e, snapshot);
+    bf4g_summary_put(qualities, values + 17,  9, 1, 0x0f, snapshot);
+    bf4g_summary_put(qualities, values + 18, 10, 4, 0x10, snapshot);
+    bf4g_summary_put(qualities, values + 22, 11, 1, 0x11, snapshot);
+    bf4g_summary_put(qualities, values + 23, 12, 1, 0x12, snapshot);
+    bf4g_summary_put(qualities, values + 24, 13, 1, 0x13, snapshot);
+    bf4g_summary_put(qualities, values + 25, 14, 2, BF4G_PARAM_SOURCE(14), snapshot);
+    bf4g_summary_put(qualities, values + 27, 15, 2, BF4G_PARAM_SOURCE(16), snapshot);
+    bf4g_summary_put(qualities, values + 29, 16, 2, BF4G_PARAM_SOURCE(15), snapshot);
+    bf4g_summary_put(qualities, values + 31, 17, 2, BF4G_PARAM_SOURCE(20), snapshot);
+    bf4g_summary_put(qualities, values + 33, 18, 2, BF4G_PARAM_SOURCE(0), snapshot);
+    bf4g_summary_put(qualities, values + 35, 19, 2, BF4G_PARAM_SOURCE(1), snapshot);
+    bf4g_summary_put(qualities, values + 37, 20, 2, BF4G_PARAM_SOURCE(3), snapshot);
+    bf4g_summary_put(qualities, values + 39, 21, 2, BF4G_PARAM_SOURCE(2), snapshot);
+    bf4g_summary_put(qualities, values + 41, 22, 2, BF4G_PARAM_SOURCE(6), snapshot);
+    bf4g_summary_put(qualities, values + 43, 23, 2, BF4G_PARAM_SOURCE(7), snapshot);
 }
 
 /******************************************************************************
@@ -2079,13 +2113,14 @@ static void bf4g_main_fields(u8 xdata *qualities, u8 xdata *values) //20261116-1
  * 返回值         : 应答数据长度。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u8 bf4g_read_summary(u8 xdata *out, u8 length, bit extended) //20261116-11 change
+static u8 bf4g_read_summary(u8 xdata *out, u8 length, bit extended) //20261116-12 change
 {
     u8 i;
     u8 value_start = extended ? 11 : 8;
     u8 reserve_start = extended ? 76 : 53;
     u8 xdata *qualities = out + 2;
     u8 xdata *values = out + value_start;
+    bf4g_diagnostics_t xdata snapshot;
 
     if (length != 0) {
         return bf4g_error(out, 3, 0xff);
@@ -2097,20 +2132,21 @@ static u8 bf4g_read_summary(u8 xdata *out, u8 length, bit extended) //20261116-1
     for (i = 2; i < value_start; i++) {
         out[i] = 0;                 // 较长格式最后一个质量字节的保留位也从零开始。
     }
-    bf4g_main_fields(qualities, values);
+    bf4g_capture_diagnostics(&snapshot);
+    bf4g_main_fields(qualities, values, &snapshot);
     if (extended) {
         // 两组都取主循环现有的相同配置和诊断来源；各相采样逐项读取。
-        bf4g_summary_put(qualities, values + 45, 24, 2, 0x05);
-        bf4g_summary_put(qualities, values + 47, 25, 2, 0x06);
-        bf4g_summary_put(qualities, values + 49, 26, 2, 0x07);
-        bf4g_summary_put(qualities, values + 51, 27, 2, BF4G_PARAM_SOURCE(4));
-        bf4g_summary_put(qualities, values + 53, 28, 2, BF4G_PARAM_SOURCE(5));
-        bf4g_summary_put(qualities, values + 55, 29, 1, BF4G_PARAM_SOURCE(12));
-        bf4g_summary_put(qualities, values + 56, 30, 2, BF4G_PARAM_SOURCE(17));
-        bf4g_summary_put(qualities, values + 58, 31, 2, 0x16);
-        bf4g_summary_put(qualities, values + 60, 32, 2, 0x17);
-        bf4g_summary_put(qualities, values + 62, 33, 2, 0x0b);
-        bf4g_summary_put(qualities, values + 64, 34, 1, 0x15);
+        bf4g_summary_put(qualities, values + 45, 24, 2, 0x05, &snapshot);
+        bf4g_summary_put(qualities, values + 47, 25, 2, 0x06, &snapshot);
+        bf4g_summary_put(qualities, values + 49, 26, 2, 0x07, &snapshot);
+        bf4g_summary_put(qualities, values + 51, 27, 2, BF4G_PARAM_SOURCE(4), &snapshot);
+        bf4g_summary_put(qualities, values + 53, 28, 2, BF4G_PARAM_SOURCE(5), &snapshot);
+        bf4g_summary_put(qualities, values + 55, 29, 1, BF4G_PARAM_SOURCE(12), &snapshot);
+        bf4g_summary_put(qualities, values + 56, 30, 2, BF4G_PARAM_SOURCE(17), &snapshot);
+        bf4g_summary_put(qualities, values + 58, 31, 2, 0x16, &snapshot);
+        bf4g_summary_put(qualities, values + 60, 32, 2, 0x17, &snapshot);
+        bf4g_summary_put(qualities, values + 62, 33, 2, 0x0b, &snapshot);
+        bf4g_summary_put(qualities, values + 64, 34, 1, 0x15, &snapshot);
     }
     for (i = reserve_start; i < reserve_start + 10; i++) {
         out[i] = 0;                 // 每次发送前在共享帧内覆盖保留字节。

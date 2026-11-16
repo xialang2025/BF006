@@ -13,6 +13,7 @@ const u16 Value_OVP = 480;
 static u8 flash[117];
 static u8 flash_writes;
 static u32 control_faults;
+static u8 simulate_rf;
 union NUM_REG NUM5, NUM6, NUM7, NUM8;
 u8 LCD_P3, LCD_COL;
 void lcd_sensor_probe(void);
@@ -1630,6 +1631,195 @@ static void check_web_summary(void) //20261116-11 add
 }
 
 /******************************************************************************
+ * 函数名称       : decode_vector
+ * 功能描述       : 将定稿的十六进制文字转换为测试报文字节。
+ * 输入参数       : hex，连续十六进制；out，解码位置。
+ * 返回值         : 报文字节数。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 decode_vector(const char *hex, u8 *out) //20261116-12 add
+{
+    unsigned int byte;
+    u8 length = 0;
+
+    while (*hex) {
+        CHECK(hex[1] != 0 && length < 97);
+        CHECK(sscanf(hex, "%2x", &byte) == 1);
+        out[length++] = (u8)byte;
+        hex += 2;
+    }
+    return length;
+}
+
+/******************************************************************************
+ * 函数名称       : check_vector
+ * 功能描述       : 校验定稿帧并从串口入口比对应答。
+ * 输入参数       : input，请求文字；output，固定应答或空；length，期望长度。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_vector(const char *input, const char *output, u8 length) //20261116-12 add
+{
+    u8 request[97];
+    u8 expected[97];
+    u8 reply[97];
+    u8 request_length;
+
+    request_length = decode_vector(input, request);
+    CHECK(request_length == 11 + request[8] && crc(request, request_length) == 0);
+    send_request(request, request_length);
+    collect_reply(reply, length, 0);
+    CHECK(length == 11 + reply[8] && crc(reply, length) == 0);
+    CHECK(reply[5] == (request[5] | 0x80));
+    CHECK(reply[6] == request[6] && reply[7] == request[7]);
+    if (output) {
+        CHECK(decode_vector(output, expected) == length);
+        CHECK(crc(expected, length) == 0);
+        CHECK(memcmp(reply, expected, length) == 0);
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : check_final_vectors
+ * 功能描述       : 逐字节验证实施差异规范的十四个请求或应答报文。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_final_vectors(void) //20261116-12 add
+{
+    config.Dev_Address = 1;
+    config.Set_OVERLOAD_Current1 = 100;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    sys.Fault_Error = 0;
+    sys.Pump_A_state = 1;
+    sys.Fault_A_Flag = 0;
+    sys.Pump_Add_Flag = 0;
+    sys.Contact_Overload_A_Flag = 0;
+    config.Lock1 = 0;
+
+    if (TEST_PUMPS == 2 && TEST_PHASES == 1) {
+        check_vector("0143BF0603010001004984",
+                     "0143BF0603810001100000A39300C9010200DC001F611009080D75", 27);
+    }
+    check_vector("0143BF06030200020203015774", "0143BF0603820002060003010000646BA2", 17);
+    check_vector("0143BF0603100003030303843AC0", "0143BF060390000304000303849E64", 15);
+    sys.save_flag = 0;
+    check_vector("0143BF0603100003030303843AC0", "0143BF060390000304000303849E64", 15);
+    CHECK(sys.save_flag == 0);
+    check_vector("0143BF0603100004030303854EC0", "0143BF06039000040A0703000000000000038499C1", 21);
+    if (TEST_PUMPS == 1) {
+        water_status_ready = 0;
+        check_vector("0143BF060311000502010155C3", "0143BF0603910005090001010011000000007B41", 20);
+    }
+    config.Hand_Auto_timer_Flag = RUNMODE_AUTO;
+    check_vector("0143BF06031100060201015587", "0143BF06039100060A080100000000000000004904", 21);
+    check_vector("0143BF0603050007004B14", NULL, 74);
+    check_vector("0143BF0603060008004EA0", NULL, 97);
+}
+
+/******************************************************************************
+ * 函数名称       : check_long_send_integration
+ * 功能描述       : 验证最大帧发送期间本地保护与旧格式拒绝。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_long_send_integration(void) //20261116-12 add
+{
+    u8 summary[] = {1, 0x43, 0xbf, 6, 3, 6, 0, 1, 0, 0, 0};
+    u8 legacy_write[] = {
+        1, 0x43, 0xbf, 6, 2, 0x10, 0, 2, 15,
+        0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 100, 3, 3, 0x84, 0, 0
+    };
+    u8 legacy_control[] = {
+        1, 0x43, 0xbf, 6, 2, 0x11, 0, 2, 14,
+        0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 100, 1, 3, 0, 0
+    };
+    u8 new_write[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0, 2, 3, 3, 0, 80, 0, 0};
+    u8 reply[97];
+    u8 i;
+
+    dashboard_fixture();
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    sys.Fault_Error = 0;
+    sys.Pump_A_ON = 0;
+    check_error(legacy_write, sizeof(legacy_write), 2, 0xff);
+    check_error(legacy_control, sizeof(legacy_control), 2, 0xff);
+    CHECK(config.Set_OVERLOAD_Current1 == 888 && sys.Pump_A_ON == 0);
+    fill_crc(summary, sizeof(summary));
+    fill_crc(new_write, sizeof(new_write));
+    send_request(summary, sizeof(summary));
+    CHECK(uart4_sending());
+    for (i = 0; i < sizeof(reply); i++) {
+        reply[i] = S4BUF;
+        if (i < sizeof(new_write)) {
+            receive_byte(new_write[i]);
+        }
+        if (i == 45) {
+            sys.Pump_Add_Flag = 1;
+            RELAY1 = 1;
+            Contact_Overload_Control();
+            CHECK(RELAY1 == 0 && (sys.Fault_Error & ((u32)1 << ERR_OVERLOAD1)));
+        }
+        uart4_service();
+        S4CON |= 2;
+        UART4_int();
+    }
+    CHECK(uart4_sending());
+    timer_expire();
+    CHECK(!uart4_sending() && crc(reply, sizeof(reply)) == 0 && reply[33] == 0);
+    timer_expire();                 // 放行完整静默之后的新请求。
+    CHECK(config.Set_OVERLOAD_Current1 == 888);
+    send_request(new_write, sizeof(new_write));
+    collect_reply(reply, 15, 0);
+    CHECK(reply[9] == 0 && reply[12] == 80 && config.Set_OVERLOAD_Current1 == 80);
+}
+
+/******************************************************************************
+ * 函数名称       : simulate_rf_at_summary_boundary
+ * 功能描述       : 模拟遥控停止在综合应答构造中途到达。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void simulate_rf_at_summary_boundary(void) //20261116-12 add
+{
+    if (simulate_rf) {
+        simulate_rf = 0;
+        sys.Pump_A_ON = 0;
+        config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+        clear_A_Fault();               // 与现有遥控停止清故障的副作用一致。
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : check_rf_during_summary
+ * 功能描述       : 验证遥控插入后，同帧模式和故障仍来自同一次读取。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_rf_during_summary(void) //20261116-12 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 6, 0, 14, 0, 0, 0};
+    u8 reply[97];
+
+    dashboard_fixture();
+    sys.Pump_Add_Flag = 0;
+    sys.Contact_Overload_A_Flag = 0;
+    sys.Fault_Error = 4;
+    simulate_rf = 1;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    CHECK(simulate_rf == 0 && config.Hand_Auto_timer_Flag == RUNMODE_MANUAL && sys.Fault_Error == 0);
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK((reply[29] & 0x0f) == 6);
+    CHECK(reply[33] == 4 && (reply[83] & 4));
+    CHECK(crc(reply, sizeof(reply)) == 0);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1719,6 +1909,9 @@ int main(void) //20261116-0 add
     check_main_summary_fields();
     check_web_summary_length();
     check_web_summary();
+    check_final_vectors();
+    check_long_send_integration();
+    check_rf_during_summary();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

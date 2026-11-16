@@ -58,6 +58,12 @@ def run_model(model, model_byte, phases, pumps, volts):
                                ("configPar.c", "utf-8"), ("contact_overload.c", "utf-8")):
             source = (SRC / name).read_text(encoding=encoding)
             source = re.sub(r"\binterrupt\s+\w+", "", source)
+            if name == "updata4G.c":
+                checkpoint = next(line for line in source.splitlines()
+                                  if "values +  8,  4, 2, 0x08" in line)
+                source = "extern void simulate_rf_at_summary_boundary(void);\n" + source.replace(
+                    checkpoint, checkpoint + "\n    simulate_rf_at_summary_boundary();"
+                )
             (directory / name).write_text(source, encoding="utf-8")
         system_source = (SRC / "system.c").read_text(encoding="cp936")
         readiness = system_source[system_source.index("static volatile bit water_inputs_ready"):
