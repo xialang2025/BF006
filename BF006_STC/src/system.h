@@ -322,6 +322,8 @@ void Fault_Control(void);
 void Customer_Test_Limit_Handle(void);       //20260501-0 add customer test time-limit fault check
 u8 Customer_Test_Limit_IsFaultActive(void);  //20260501-0 add query whether the customer test time-limit fault is locked
 
+u8 check_A_Fault(void); //20261116-8 add 远程开泵复用本地故障判断。
+u8 check_B_Fault(void);
 void clear_A_Fault(void);
 void clear_B_Fault(void);
 

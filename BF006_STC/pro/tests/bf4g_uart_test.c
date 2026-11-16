@@ -12,6 +12,7 @@ u16 Limit_Current;
 const u16 Value_OVP = 480;
 static u8 flash[117];
 static u8 flash_writes;
+static u32 control_faults;
 sys_t sys;
 bit Boot_Flag;
 u8 LowWater_M, LowWater_H, HighWater_M, HighWater_H, PUMP_ADD, OverFlow_P, P34;
@@ -235,7 +236,7 @@ static void check_info(u8 interfere) //20261116-0 add
     static const u8 expected[] = {
         0x01, 0x43, 0xbf, 0x06, 0x03, 0x81, 0x00, 0x01, 0x10,
         0x00, 0x00, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8,
-        TEST_VOLTS & 0xff, 0x00, 0x0f, 0x61, 0x10, 0x09, 0x08
+        TEST_VOLTS & 0xff, 0x00, 0x1f, 0x61, 0x10, 0x09, 0x08
     };
 
     send_request(info_request, sizeof(info_request));
@@ -1174,6 +1175,158 @@ static void check_address_change(void) //20261116-7 add
 }
 
 /******************************************************************************
+ * 函数名称       : control_wire
+ * 功能描述       : 发送远程控制并读取成功应答。
+ * 输入参数       : action，动作；target，目标。
+ * 返回值         : 应答中的运行状态。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u16 control_wire(u8 action, u8 target) //20261116-8 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0x11, 0x11, 2, action, target, 0, 0};
+    u8 reply[20];
+
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x91 && reply[6] == 0x11 && reply[7] == 0x11);
+    CHECK(reply[8] == 9 && reply[9] == 0 && reply[10] == action && reply[11] == target);
+    CHECK(crc(reply, sizeof(reply)) == 0);
+    control_faults = (u32)reply[14] << 24 | (u32)reply[15] << 16 | (u32)reply[16] << 8 | reply[17];
+    return (u16)reply[12] << 8 | reply[13];
+}
+
+/******************************************************************************
+ * 函数名称       : check_manual_start
+ * 功能描述       : 验证手动开停只设置选定泵的控制意图。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_manual_start(void) //20261116-8 add
+{
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    config.Lock1 = 0;
+    sys.Pump_A_ON = 0;
+    sys.Fault_A_Flag = 0;
+    sys.Contact_Overload_A_Flag = 0;
+    sys.Pump_Add_Flag = 0;
+    sys.Fault_Error = 0;
+
+    CHECK((control_wire(1, 1) & 1) == 1);
+    CHECK(sys.Pump_A_ON == 1);
+    CHECK((control_wire(2, 1) & 1) == 1);
+    CHECK(sys.Pump_A_ON == 0 && config.Hand_Auto_timer_Flag == RUNMODE_MANUAL);
+}
+
+/******************************************************************************
+ * 函数名称       : check_control_limits
+ * 功能描述       : 验证远程开停的模式、目标、锁定和重复操作。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_control_limits(void) //20261116-8 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0x11, 0x11, 2, 1, 1, 0, 0};
+
+    config.Hand_Auto_timer_Flag = RUNMODE_AUTO;
+    sys.Pump_A_ON = 1;
+    check_error(request, sizeof(request), 8, 1);
+    request[9] = 2;
+    check_error(request, sizeof(request), 8, 2);
+    CHECK(sys.Pump_A_ON == 1 && config.Hand_Auto_timer_Flag == RUNMODE_AUTO);
+
+    sys.save_flag = 0;
+    CHECK((control_wire(3, 0) & 0x0f) == 1);
+    CHECK(sys.Pump_A_ON == 1 && sys.save_flag == 1);
+    sys.save_flag = 0;
+    control_wire(3, 0);
+    CHECK(sys.save_flag == 0);
+    control_wire(2, 3);
+
+    request[9] = 1;
+    request[10] = 3;
+    config.Lock1 = 1;
+    check_error(request, sizeof(request), 9, 1);
+    CHECK(sys.Pump_A_ON == 0 && sys.Pump_B_ON == 0);
+    config.Lock1 = 0;
+    if (TEST_PUMPS == 2) {
+        config.Lock2 = 1;
+        check_error(request, sizeof(request), 9, 1);
+        CHECK(sys.Pump_A_ON == 0 && sys.Pump_B_ON == 0);
+        config.Lock2 = 0;
+    } else {
+        request[10] = 2;
+        check_error(request, sizeof(request), 6, 1);
+    }
+    control_wire(1, 3);
+    CHECK(sys.Pump_A_ON == 1 && sys.Pump_B_ON == (TEST_PUMPS == 2));
+    control_wire(2, 3);
+
+    sys.Auto_timer_count = 500;
+    CHECK((control_wire(5, 0) & 0x0f) == 10);
+    CHECK(sys.autoTimerFlag == 1 && sys.Auto_timer_count == 0 && sys.save_flag == 1);
+    sys.save_flag = 0;
+    sys.Auto_timer_count = 50;
+    control_wire(5, 0);
+    CHECK(sys.Auto_timer_count == 50 && sys.save_flag == 0);
+    CHECK((control_wire(4, 0) & 0x0f) == 6);
+    CHECK(sys.save_flag == 1);
+    control_wire(3, 0);
+
+    request[9] = 7;
+    check_error(request, sizeof(request), 4, 7);
+    request[9] = 3;
+    check_error(request, sizeof(request), 4, 3);
+    request[9] = 1;
+    request[10] = 0;
+    check_error(request, sizeof(request), 4, 1);
+    request[10] = 1;
+    config_loaded = 0;
+    check_error(request, sizeof(request), 0x0e, 1);
+    config_loaded = 1;
+}
+
+/******************************************************************************
+ * 函数名称       : check_control_contact
+ * 功能描述       : 验证触点持续接通和断开后显式清除的原保护行为。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_control_contact(void) //20261116-8 add
+{
+    config_t before;
+    u32 expected = (u32)1 << ERR_OVERLOAD1;
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0x11, 0x11, 2, 1, 3, 0, 0};
+
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    memcpy(&before, &config, sizeof(before));
+    sys.Pump_Add_Flag = 1;
+    if (TEST_PUMPS == 2) {
+        sys.Flag_OverFlow = 1;
+        expected |= (u32)1 << ERR_OVERLOAD2;
+    }
+    Contact_Overload_Control();
+    CHECK(sys.Fault_Error == expected);
+    check_error(request, sizeof(request), 9, 1);
+    control_wire(6, 0);
+    CHECK(control_faults == expected && sys.Fault_Error == expected);
+    CHECK(RELAY1 == 0 && RELAY2 == 0);
+
+    sys.Pump_Add_Flag = sys.Flag_OverFlow = 0;
+    Contact_Overload_Control();
+    CHECK(sys.Fault_Error == expected);
+    control_wire(6, 0);
+    CHECK(control_faults == 0 && sys.Fault_Error == 0);
+    CHECK(memcmp(&config, &before, sizeof(config)) == 0);
+    control_wire(1, 3);             // 相同关联号按当前已清除的条件重新受理。
+    CHECK(sys.Pump_A_ON == 1);
+    control_wire(2, 3);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1255,6 +1408,9 @@ int main(void) //20261116-0 add
     check_sensor_width();
     check_sensor_parameter_changes();
     check_address_change();
+    check_manual_start();
+    check_control_limits();
+    check_control_contact();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

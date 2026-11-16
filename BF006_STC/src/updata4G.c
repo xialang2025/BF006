@@ -969,7 +969,7 @@ void Analyse_4G(void)
 #define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
-#define BF4G_CAPABILITIES 0x000f //20261116-7 change 已完成并验证四项读取及写入能力。
+#define BF4G_CAPABILITIES 0x001f //20261116-8 change 打开已验证的控制能力。
 
 /******************************************************************************
  * 函数名称       : bf4g_crc
@@ -1342,23 +1342,22 @@ static u8 bf4g_tank_quality(void) //20261116-6 change
  * 返回值         : 运行状态位图。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u16 bf4g_run_status(u8 *quality) //20261116-2 add
+static u16 bf4g_run_status(u8 *quality) //20261116-8 change
 {
     static const u8 code mode_bits[] = {1, 6, 10};
-    u16 state;
+    u16 state = 0;
     u8 mode = config.Hand_Auto_timer_Flag;
+    u8 tanks = bf4g_tank_quality();
+#if (Model_OUT == Model_1C2)
     u8 priority = config.Pump_AB_Mode;
+#endif
 
-    *quality = bf4g_tank_quality();
-    if (*quality != 0) {
-        return 0;
-    }
-    if (mode > RUNMODE_TIMER || (Model_OUT == Model_1C2 && priority > 2)) {
+    *quality = tanks;
+    if (mode <= RUNMODE_TIMER) {
+        state = mode_bits[mode];
+    } else if (*quality == 0) {
         *quality = 3;
-        return 0;
     }
-
-    state = mode_bits[mode];
     if (sys.Pump_A_state) {
         state |= 0x0010;
     }
@@ -1366,11 +1365,17 @@ static u16 bf4g_run_status(u8 *quality) //20261116-2 add
     if (sys.Pump_B_state) {
         state |= 0x0020;
     }
-    state |= (u16)0x0040 << priority;
+    if (priority <= 2) {
+        state |= (u16)0x0040 << priority;
+    } else if (*quality == 0) {
+        *quality = 3;
+    }
 #endif
 
-    state |= (u16)0x0200 << sys.shang_shuiwei;
-    state |= (u16)0x1000 << sys.xia_shuiwei;
+    if (tanks == 0) {
+        state |= (u16)0x0200 << sys.shang_shuiwei;
+        state |= (u16)0x1000 << sys.xia_shuiwei;
+    }
     return state;
 }
 
@@ -1491,6 +1496,7 @@ static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
 {
     const u16 xdata *measurement;
     u32 faults;
+    u16 status;
     u8 level;
 
     *quality = 0;
@@ -1537,7 +1543,8 @@ static u32 bf4g_run_read(u8 number, u8 *quality) //20261116-2 add
 
     switch (number) {
     case 0x08:
-        return bf4g_run_status(quality);
+        status = bf4g_run_status(quality);
+        return *quality ? 0 : status; //20261116-8 change 带质量的监测项在异常时传零。
     case 0x09:
     case 0x0a:
     case 0x0b:
@@ -1893,13 +1900,120 @@ static u8 bf4g_write_parameter(u8 xdata *out, u8 length) //20261116-4 add
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_start_blocked
+ * 功能描述       : 按现有故障、锁定及滤波触点输入判断启动条件。
+ * 输入参数       : target，实际目标泵位图。
+ * 返回值         : 有任何目标不能启动时为一。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static bit bf4g_start_blocked(u8 target) //20261116-8 add
+{
+    if ((target & 1) &&
+        (config.Lock1 || sys.Fault_A_Flag || check_A_Fault() ||
+         sys.Pump_Add_Flag || sys.Contact_Overload_A_Flag)) {
+        return 1;
+    }
+#if (Model_OUT == Model_1C2)
+    if ((target & 2) &&
+        (config.Lock2 || sys.Fault_B_Flag || check_B_Fault() ||
+         sys.Flag_OverFlow || sys.Contact_Overload_B_Flag)) {
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_control
+ * 功能描述       : 校验请求，受理开停、模式切换或当前故障清除，返回当前诊断。
+ * 输入参数       : out，请求及应答数据位置；length，请求数据长度。
+ * 返回值         : 应答数据长度。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-8 add
+{
+    u8 action;
+    u8 target;
+    u8 pumps;
+    u8 mode;
+    u8 quality;
+    bit interrupts;
+
+    if (length != 2) {
+        return bf4g_error(out, 3, length ? out[0] : 0xff);
+    }
+    action = out[0];
+    target = out[1];
+    if (action == 0 || action > 6 ||
+        (action <= 2 ? (target == 0 || target > 3) : target != 0)) {
+        return bf4g_error(out, 4, action);
+    }
+    if (!config_loaded) {
+        return bf4g_error(out, 0x0e, action);
+    }
+
+    if (action <= 2) {
+        pumps = target;
+#if (Model_OUT == Model_1C1)
+        if (target == 2) {
+            return bf4g_error(out, 6, action);
+        }
+        pumps = 1;                   // 一控一的全部目标等同于唯一水泵。
+#endif
+        if (config.Hand_Auto_timer_Flag != RUNMODE_MANUAL) {
+            return bf4g_error(out, 8, action);
+        }
+
+        interrupts = EA;
+        EA = 0;
+        if (action == 1 && bf4g_start_blocked(pumps)) {
+            EA = interrupts;
+            return bf4g_error(out, 9, action);
+        }
+        // 所有目标通过检查后再一次发布意图，继电器由原本地扫描控制。
+        if (pumps & 1) {
+            sys.Pump_A_ON = action == 1;
+        }
+#if (Model_OUT == Model_1C2)
+        if (pumps & 2) {
+            sys.Pump_B_ON = action == 1;
+        }
+#endif
+        EA = interrupts;
+    } else if (action == 6) {
+        clear_A_Fault();
+#if (Model_OUT == Model_1C2)
+        clear_B_Fault();
+#endif
+        Contact_Overload_Control(); // 持续输入及刚确认的触点状态仍应锁存。
+    } else {
+        mode = action - 3;
+        if (config.Hand_Auto_timer_Flag != mode) {
+            config.Hand_Auto_timer_Flag = mode;
+            if (mode == RUNMODE_TIMER) {
+                sys.autoTimerFlag = 1;
+                sys.Auto_timer_count = 0;
+            }
+            sys.save_flag = 1;
+        }
+    }
+
+    out[0] = 0;
+    out[1] = action;
+    out[2] = target;
+    bf4g_put_u16(out + 3, bf4g_run_status(&quality));
+    bf4g_put_u32(out + 5, sys.Fault_Error);
+    return 9;
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_reply
  * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
  * 输入参数       : frame，共享报文缓冲；length，实收字节数。
  * 返回值         : 应答字节数，静默丢弃为零。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-4 change
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-8 change
 {
     u8 xdata *out;
     u8 data_length;
@@ -1920,7 +2034,8 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-4 change
         }
         data_length = bf4g_error(out, 2, 0xff);
     } else if (data_length != length - BF4G_OVERHEAD || (frame[6] | frame[7]) == 0) {
-        object = ((frame[5] >= 2 && frame[5] <= 4) || frame[5] == 0x10) && data_length &&
+        object = ((frame[5] >= 2 && frame[5] <= 4) || frame[5] == 0x10 || frame[5] == 0x11) &&
+                 data_length &&
                  length > BF4G_OVERHEAD ? out[0] : 0xff;
         data_length = bf4g_error(out, 3, object);
     } else {
@@ -1944,6 +2059,9 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-4 change
             break;
         case 0x10:
             data_length = bf4g_write_parameter(out, data_length);
+            break;
+        case 0x11:
+            data_length = bf4g_control(out, data_length);
             break;
         default:
             data_length = bf4g_error(out, 1, 0xff);

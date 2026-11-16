@@ -47,13 +47,15 @@ def run_model(model, model_byte, phases, pumps, volts):
             'extern bit water_status_ready, sensor_sample_ready, sensor_alarm_pending;\n'
             'extern u8 sensor_pending_tanks;\nvoid updatSysdata(void);\nvoid sensorOverFlowCheck(void);\n'
             '#define SENSOR_PENDING_UPPER 1\n#define SENSOR_PENDING_LOWER 2\n'
+            'u8 check_A_Fault(void);\nu8 check_B_Fault(void);\n'
+            'void clear_A_Fault(void);\nvoid clear_B_Fault(void);\nvoid Contact_Overload_Control(void);\n'
             '#include "configPar.h"\n#endif\n', encoding="utf-8"
         )
-        for name in ("uart4.h", "configPar.h", "Modbus_New.h", "Modbus.h", "ad.h", "Display.h", "HT1622.h", "user.h"):
+        for name in ("uart4.h", "configPar.h", "Modbus_New.h", "Modbus.h", "ad.h", "Display.h", "HT1622.h", "user.h", "contact_overload.h"):
             shutil.copyfile(SRC / name, directory / name)
         shutil.copyfile(SRC / "EEPROM.h", directory / "eeprom.h")
         for name, encoding in (("uart4.c", "cp936"), ("updata4G.c", "utf-8"),
-                               ("configPar.c", "utf-8")):
+                               ("configPar.c", "utf-8"), ("contact_overload.c", "utf-8")):
             source = (SRC / name).read_text(encoding=encoding)
             source = re.sub(r"\binterrupt\s+\w+", "", source)
             (directory / name).write_text(source, encoding="utf-8")
@@ -68,7 +70,7 @@ def run_model(model, model_byte, phases, pumps, volts):
                               system_source.index("void FanXiu_pro(void)")]
         rust = system_source[system_source.index("void FanXiu_pro(void)"):
                              system_source.index("\n}", system_source.index("void FanXiu_pro(void)")) + 2]
-        error_state = system_source[system_source.index("void Fault_Error_Clear("):
+        error_state = system_source[system_source.index("void Fault_Error_Set("):
                                     system_source.index("void Pump_Current_Check(")]
         error_state = error_state.split("#if (Model_Voltage == Model_3PH)")[0]
         fault_checks = system_source[system_source.index("u8 check_A_Fault(void)"):
@@ -77,13 +79,20 @@ def run_model(model, model_byte, phases, pumps, volts):
                                        system_source.index("void LosePhase_Check(void)")]
         recovery = system_source[system_source.index("void ReStart_Clear_Fault(void)"):
                                  system_source.index("void zhengdingA(void)")]
+        contact = system_source[system_source.index("void Contact_Overload_Control(void)"):
+                                system_source.index("#if (Model_OUT == Model_1C2)\nvoid Set_Pump2_OverLoad_Err(")]
+        clear_faults = system_source[system_source.index("void Fault_Protect_PA(void)"):
+                                     system_source.index("u8 check_A_Fault(void)")]
+        indications = system_source[system_source.index("void DIS_Fault(u8 num)"):
+                                     system_source.index("void Customer_Test_Limit_Handle(void)")]
         recovery_limit = re.search(r"^#define Fault_UVP_Recovery_Time \d+", system_source, re.MULTILINE)[0]
         (directory / "sampling.c").write_text(
-            '#include "system.h"\n#include "ad.h"\n'
+            '#include "system.h"\n#include "ad.h"\n#include "contact_overload.h"\n'
             'extern void Speak_Con(u8 value);\nextern void Speak_Stop(void);\n'
             + recovery_limit + "\n"
             + readiness + "\n" + scaling + sampling + cycle + rust + "\n"
-            + error_state + fault_checks + voltage_checks + recovery, encoding="utf-8"
+            + error_state + fault_checks + voltage_checks + recovery
+            + indications + clear_faults + contact, encoding="utf-8"
         )
         runner = directory / "bf4g_uart_test.exe"
         subprocess.run(
@@ -92,7 +101,8 @@ def run_model(model, model_byte, phases, pumps, volts):
              f"-DTEST_PUMPS={pumps}", f"-DTEST_VOLTS={volts}",
              "-I", str(directory), str(TESTS / "bf4g_uart_test.c"),
              str(directory / "uart4.c"), str(directory / "updata4G.c"),
-             str(directory / "sampling.c"), str(directory / "configPar.c"), "-o", str(runner)],
+             str(directory / "sampling.c"), str(directory / "configPar.c"),
+             str(directory / "contact_overload.c"), "-o", str(runner)],
             check=True,
         )
         subprocess.run([str(runner)], check=True)
