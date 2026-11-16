@@ -94,6 +94,18 @@ def run_model(model, model_byte, phases, pumps, volts):
             + error_state + fault_checks + voltage_checks + recovery
             + indications + clear_faults + contact, encoding="utf-8"
         )
+        user_source = (SRC / "user.c").read_text(encoding="cp936")
+        display_start = user_source.index("static void display_sensor_value(void)")
+        display_end = user_source.index("\n}", display_start) + 2
+        display = user_source[display_start:display_end].replace(
+            "static void display_sensor_value", "void lcd_sensor_probe", 1
+        )
+        display_source = (SRC / "Display.c").read_text(encoding="cp936")
+        digits = re.search(r"^const u8 LED_LIST[^\n]*", display_source, re.MULTILINE)[0]
+        (directory / "lcd_probe.c").write_text(
+            '#include "Display.h"\n#include "HT1622.h"\n' + digits
+            + "\n" + display + "\n", encoding="utf-8"
+        )
         runner = directory / "bf4g_uart_test.exe"
         subprocess.run(
             [os.environ.get("CC", "gcc"), "-std=c99", "-Wall", "-fpack-struct=1",
@@ -102,7 +114,7 @@ def run_model(model, model_byte, phases, pumps, volts):
              "-I", str(directory), str(TESTS / "bf4g_uart_test.c"),
              str(directory / "uart4.c"), str(directory / "updata4G.c"),
              str(directory / "sampling.c"), str(directory / "configPar.c"),
-             str(directory / "contact_overload.c"), "-o", str(runner)],
+             str(directory / "contact_overload.c"), str(directory / "lcd_probe.c"), "-o", str(runner)],
             check=True,
         )
         subprocess.run([str(runner)], check=True)

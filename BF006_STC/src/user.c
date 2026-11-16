@@ -1088,6 +1088,43 @@ void Err_Check_Dis(void)
     }
 }
 
+/******************************************************************************
+ * 函数名称       : display_sensor_value
+ * 功能描述       : 将百分位工程值转换为四位数字和对应的小数点位置。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void display_sensor_value(void) //20261116-9 add
+{
+    u32 value = sys.SensorOut;
+    u16 digits;
+
+    LCD_P3 = 0;
+    LCD_COL = 0;
+    if (!sensor_sample_ready || sys.sensor_err || sys.Auto_Mode != config.Auto_Mode ||
+        value >= 100000UL) {
+        NUM5.All = LED_LIST[11];       // 无效或超出显示容量时显示四条短线。
+        NUM6.All = LED_LIST[11];
+        NUM7.All = LED_LIST[11];
+        NUM8.All = LED_LIST[11];
+        return;
+    }
+
+    if (value < 10000UL) {
+        digits = (u16)value;
+        LCD_P3 = 1;                   // 第二位数字后的段用于显示百分位。
+    } else {
+        digits = (u16)(value / 10UL); // 仅显示端舍去百分位。
+        LCD_COL = 1;                  // 选择第三位数字后的段。
+    }
+
+    NUM5.All = digits >= 1000 ? LED_LIST[digits / 1000] : 0;
+    NUM6.All = LED_LIST[digits / 100 % 10];
+    NUM7.All = LED_LIST[digits / 10 % 10];
+    NUM8.All = LED_LIST[digits % 10];
+}
+
 void DIS_Control(void)
 {
     u16 RemainTime;
@@ -1372,32 +1409,18 @@ void DIS_Control(void)
             }
             else if (sys.Auto_Mode == SENSORTYPE_WATER4_20MA) // 液位
             {
-                NUM5.All = LED_LIST[sys.SensorOut / 1000 % 10];
-                ;
-                NUM6.All = LED_LIST[sys.SensorOut / 100 % 10];
-                NUM7.All = LED_LIST[sys.SensorOut / 10 % 10];
-                NUM8.All = LED_LIST[sys.SensorOut % 10];
+                display_sensor_value(); //20261116-9 change 统一使用按范围选择的小数位。
                 LCD_MIMITER = 1;
-                LCD_P3 = 1;
             }
             else if (sys.Auto_Mode == SENSORTYPE_PRESS4_20MA) // 压力传感器
             {
-                NUM5.All = LED_LIST[sys.SensorOut / 1000 % 10];
-                ;
-                NUM6.All = LED_LIST[sys.SensorOut / 100 % 10];
-                NUM7.All = LED_LIST[sys.SensorOut / 10 % 10];
-                NUM8.All = LED_LIST[sys.SensorOut % 10];
+                display_sensor_value(); //20261116-9 change 统一使用按范围选择的小数位。
                 LCD_MPA = 1;
-                LCD_P3 = 1;
             }
             else if (sys.Auto_Mode == SENSORTYPE_PRESS0_5V) // 远传压力
             {
-                NUM5.All = LED_LIST[sys.SensorOut / 1000 % 10];
-                NUM6.All = LED_LIST[sys.SensorOut / 100 % 10];
-                NUM7.All = LED_LIST[sys.SensorOut / 10 % 10];
-                NUM8.All = LED_LIST[sys.SensorOut % 10];
+                display_sensor_value(); //20261116-9 change 统一使用按范围选择的小数位。
                 LCD_MPA = 1;
-                LCD_P3 = 1;
             }
             else // 水位
             {

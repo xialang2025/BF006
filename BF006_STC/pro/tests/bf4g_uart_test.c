@@ -13,6 +13,9 @@ const u16 Value_OVP = 480;
 static u8 flash[117];
 static u8 flash_writes;
 static u32 control_faults;
+union NUM_REG NUM5, NUM6, NUM7, NUM8;
+u8 LCD_P3, LCD_COL;
+void lcd_sensor_probe(void);
 sys_t sys;
 bit Boot_Flag;
 u8 LowWater_M, LowWater_H, HighWater_M, HighWater_H, PUMP_ADD, OverFlow_P, P34;
@@ -1327,6 +1330,59 @@ static void check_control_contact(void) //20261116-8 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_display_digits
+ * 功能描述       : 检查连续量显示的位数、小数点、边界和无效提示。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_display_digits(void) //20261116-9 add
+{
+    sensor_sample_ready = 1;
+    config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_WATER4_20MA;
+    sys.sensor_err = 0;
+    sys.SensorOut = 12345;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == LED_LIST[1] && NUM6.All == LED_LIST[2]);
+    CHECK(NUM7.All == LED_LIST[3] && NUM8.All == LED_LIST[4]);
+    CHECK(!LCD_P3 && LCD_COL);
+
+    sys.SensorOut = 0;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == 0 && NUM6.All == LED_LIST[0]);
+    CHECK(NUM7.All == LED_LIST[0] && NUM8.All == LED_LIST[0]);
+    CHECK(LCD_P3 && !LCD_COL);
+
+    sys.SensorOut = 9999;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == LED_LIST[9] && NUM8.All == LED_LIST[9] && LCD_P3 && !LCD_COL);
+
+    sys.SensorOut = 10000;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == LED_LIST[1] && NUM6.All == LED_LIST[0]);
+    CHECK(NUM7.All == LED_LIST[0] && NUM8.All == LED_LIST[0] && !LCD_P3 && LCD_COL);
+
+    sys.SensorOut = 99999;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == LED_LIST[9] && NUM8.All == LED_LIST[9] && !LCD_P3 && LCD_COL);
+    CHECK(sys.SensorOut == 99999UL);
+
+    sys.SensorOut = 100000;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == LED_LIST[11] && NUM6.All == LED_LIST[11]);
+    CHECK(NUM7.All == LED_LIST[11] && NUM8.All == LED_LIST[11] && !LCD_P3 && !LCD_COL);
+
+    sys.SensorOut = 5000;
+    sys.sensor_err = 1;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == LED_LIST[11] && NUM8.All == LED_LIST[11] && !LCD_P3 && !LCD_COL);
+    sys.sensor_err = 0;
+    sensor_sample_ready = 0;
+    lcd_sensor_probe();
+    CHECK(NUM5.All == LED_LIST[11] && NUM8.All == LED_LIST[11] && !LCD_P3 && !LCD_COL);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1411,6 +1467,7 @@ int main(void) //20261116-0 add
     check_manual_start();
     check_control_limits();
     check_control_contact();
+    check_display_digits();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }
