@@ -175,7 +175,7 @@ static void check_info(u8 interfere) //20261116-0 add
     static const u8 expected[] = {
         0x01, 0x43, 0xbf, 0x06, 0x03, 0x81, 0x00, 0x01, 0x10,
         0x00, 0x00, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8,
-        TEST_VOLTS & 0xff, 0x00, 0x01, 0x61, 0x10, 0x09, 0x08
+        TEST_VOLTS & 0xff, 0x00, 0x05, 0x61, 0x10, 0x09, 0x08
     };
 
     send_request(info_request, sizeof(info_request));
@@ -536,6 +536,80 @@ static void check_sensor_sample(void) //20261116-2 add
 }
 
 /******************************************************************************
+ * 函数名称       : read_history
+ * 功能描述       : 读取一段历史，逐字节核对故障号、原值和质量。
+ * 输入参数       : start，首槽；count，槽数；expected，预期条目。
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void read_history(u8 start, u8 count, const u8 *expected) //20261116-3 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 4, 0, 7, 2, start, count, 0, 0};
+    u8 reply[62];
+
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, 14 + 6 * count, 0);
+    CHECK(reply[5] == 0x84 && reply[6] == 0 && reply[7] == 7);
+    CHECK(reply[8] == 3 + 6 * count && reply[9] == 0 && reply[10] == start && reply[11] == count);
+    CHECK(memcmp(reply + 12, expected, 6 * count) == 0);
+    CHECK(crc(reply, 14 + 6 * count) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : check_history
+ * 功能描述       : 验证全零欠压记录、空槽、异常原值、未装载和读取边界。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_history(void) //20261116-3 add
+{
+    static const u8 expected[] = {
+        0, 0, 0, 0, 0, 0,
+        4, 17, 0, 0, 0, 0,
+        3, 255, 0x12, 0x34, 0x56, 0x78,
+        0, 16, 0, 0, 0, 0,
+        0, 15, 0, 0, 0, 0,
+        0, 14, 0, 0, 0, 0,
+        0, 13, 0, 0, 0, 0,
+        0, 12, 0, 0, 0, 0,
+        0, 11, 0, 0, 0, 0,
+        0, 10, 0, 0, 0, 0
+    };
+    static const u8 unloaded[] = {2, 17, 0, 0, 0, 0};
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 4, 0, 8, 2, 10, 0, 0, 0};
+    config_t before;
+    u8 i;
+
+    for (i = 0; i < 10; i++) {
+        config.Record_Type[i] = expected[6 * i + 1];
+    }
+    config.Record_Dat1[1] = 99;
+    config.Record_Dat2[1] = 52;
+    config.Record_Dat1[2] = 0x1234;
+    config.Record_Dat2[2] = 0x5678;
+    sys.save_flag = 0;
+    memcpy(&before, &config, sizeof(before));
+
+    read_history(0, 8, expected);
+    read_history(8, 2, expected + 48);
+    read_history(9, 1, expected + 54);
+    config_loaded = 0;
+    read_history(0, 1, unloaded);
+    config_loaded = 1;
+    check_error(request, sizeof(request), 4, 10);
+    request[9] = 0;
+    check_error(request, sizeof(request), 3, 0);
+    request[10] = 9;
+    check_error(request, sizeof(request), 3, 0);
+    request[9] = 9;
+    request[10] = 2;
+    check_error(request, sizeof(request), 3, 9);
+    CHECK(sys.save_flag == 0 && memcmp(&before, &config, sizeof(before)) == 0);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -608,6 +682,7 @@ int main(void) //20261116-0 add
     check_one_runtime_field();
     check_runtime_fields();
     check_sensor_sample();
+    check_history();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

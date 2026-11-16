@@ -969,7 +969,7 @@ void Analyse_4G(void)
 #define BF4G_FMT          0x03 //20261116-0 add 新格式使用独立版本号。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
-#define BF4G_CAPABILITIES 0x0001 //20261116-1 change 已验证的参数读取能力。
+#define BF4G_CAPABILITIES 0x0005 //20261116-3 change 已验证的参数和历史读取能力。
 
 /******************************************************************************
  * 函数名称       : bf4g_crc
@@ -1663,13 +1663,71 @@ static u8 bf4g_read_runtime(u8 xdata *out, u8 length) //20261116-2 add
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_read_history
+ * 功能描述       : 按区间读取故障存储槽，保留欠压零号和异常原值。
+ * 输入参数       : out，请求及应答数据位置；length，请求数据长度。
+ * 返回值         : 应答数据长度。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 bf4g_read_history(u8 xdata *out, u8 length) //20261116-3 add
+{
+    u8 start;
+    u8 count;
+    u8 slot;
+    u8 number;
+    u8 quality;
+    u16 voltage;
+    u16 current;
+    u8 xdata *entry;
+
+    if (length != 2) {
+        return bf4g_error(out, 3, length ? out[0] : 0xff);
+    }
+    start = out[0];
+    count = out[1];
+    if (start >= 10) {
+        return bf4g_error(out, 4, start);
+    }
+    if (count == 0 || count > 8 || count > 10 - start) {
+        return bf4g_error(out, 3, start);
+    }
+
+    out[0] = 0;
+    out[1] = start;
+    out[2] = count;
+    entry = out + 3;
+    for (slot = start; slot < start + count; slot++) {
+        number = ERR_NUMB;
+        voltage = 0;
+        current = 0;
+        quality = 2;
+        if (config_loaded) {
+            number = config.Record_Type[slot];
+            if (number == ERR_NUMB) {
+                quality = 4;         // 仅原故障号十七代表空槽。
+            } else {
+                quality = number > ERR_NUMB ? 3 : 0;
+                voltage = config.Record_Dat1[slot];
+                current = config.Record_Dat2[slot];
+            }
+        }
+        entry[0] = quality;
+        entry[1] = number;
+        bf4g_put_u16(entry + 2, voltage);
+        bf4g_put_u16(entry + 4, current);
+        entry += 6;
+    }
+    return 3 + count * 6;
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_reply
  * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
  * 输入参数       : frame，共享报文缓冲；length，实收字节数。
  * 返回值         : 应答字节数，静默丢弃为零。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-2 change
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-3 change
 {
     u8 xdata *out;
     u8 data_length;
@@ -1690,7 +1748,7 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-2 change
         }
         data_length = bf4g_error(out, 2, 0xff);
     } else if (data_length != length - BF4G_OVERHEAD || (frame[6] | frame[7]) == 0) {
-        object = (frame[5] == 2 || frame[5] == 3) && data_length &&
+        object = frame[5] >= 2 && frame[5] <= 4 && data_length &&
                  length > BF4G_OVERHEAD ? out[0] : 0xff;
         data_length = bf4g_error(out, 3, object);
     } else {
@@ -1708,6 +1766,9 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-2 change
             break;
         case 3:
             data_length = bf4g_read_runtime(out, data_length);
+            break;
+        case 4:
+            data_length = bf4g_read_history(out, data_length);
             break;
         default:
             data_length = bf4g_error(out, 1, 0xff);
