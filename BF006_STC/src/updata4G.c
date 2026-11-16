@@ -2073,15 +2073,19 @@ static void bf4g_main_fields(u8 xdata *qualities, u8 xdata *values) //20261116-1
 }
 
 /******************************************************************************
- * 函数名称       : bf4g_read_main
- * 功能描述       : 组装主控综合应答，清零质量区和扩展保留区。
- * 输入参数       : out，应答数据位置；length，请求数据长度。
+ * 函数名称       : bf4g_read_summary
+ * 功能描述       : 按命令组装主控或网页查询应答，复用前二十四项的紧凑布局。
+ * 输入参数       : out，应答数据位置；length，请求数据长度；extended，是否追加双泵及诊断项。
  * 返回值         : 应答数据长度。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u8 bf4g_read_main(u8 xdata *out, u8 length) //20261116-10 add
+static u8 bf4g_read_summary(u8 xdata *out, u8 length, bit extended) //20261116-11 change
 {
     u8 i;
+    u8 value_start = extended ? 11 : 8;
+    u8 reserve_start = extended ? 76 : 53;
+    u8 xdata *qualities = out + 2;
+    u8 xdata *values = out + value_start;
 
     if (length != 0) {
         return bf4g_error(out, 3, 0xff);
@@ -2090,14 +2094,28 @@ static u8 bf4g_read_main(u8 xdata *out, u8 length) //20261116-10 add
     out[1] = (Model_Voltage == Model_3PH ? 1 : 0) |
              (Model_OUT == Model_1C2 ? 2 : 0) |
              (VoltageValue == Vol_380 ? 4 : 0);
-    for (i = 2; i < 8; i++) {
-        out[i] = 0;
+    for (i = 2; i < value_start; i++) {
+        out[i] = 0;                 // 较长格式最后一个质量字节的保留位也从零开始。
     }
-    bf4g_main_fields(out + 2, out + 8);
-    for (i = 53; i < 63; i++) {
+    bf4g_main_fields(qualities, values);
+    if (extended) {
+        // 两组都取主循环现有的相同配置和诊断来源；各相采样逐项读取。
+        bf4g_summary_put(qualities, values + 45, 24, 2, 0x05);
+        bf4g_summary_put(qualities, values + 47, 25, 2, 0x06);
+        bf4g_summary_put(qualities, values + 49, 26, 2, 0x07);
+        bf4g_summary_put(qualities, values + 51, 27, 2, BF4G_PARAM_SOURCE(4));
+        bf4g_summary_put(qualities, values + 53, 28, 2, BF4G_PARAM_SOURCE(5));
+        bf4g_summary_put(qualities, values + 55, 29, 1, BF4G_PARAM_SOURCE(12));
+        bf4g_summary_put(qualities, values + 56, 30, 2, BF4G_PARAM_SOURCE(17));
+        bf4g_summary_put(qualities, values + 58, 31, 2, 0x16);
+        bf4g_summary_put(qualities, values + 60, 32, 2, 0x17);
+        bf4g_summary_put(qualities, values + 62, 33, 2, 0x0b);
+        bf4g_summary_put(qualities, values + 64, 34, 1, 0x15);
+    }
+    for (i = reserve_start; i < reserve_start + 10; i++) {
         out[i] = 0;                 // 每次发送前在共享帧内覆盖保留字节。
     }
-    return 63;
+    return reserve_start + 10;
 }
 
 /******************************************************************************
@@ -2107,7 +2125,7 @@ static u8 bf4g_read_main(u8 xdata *out, u8 length) //20261116-10 add
  * 返回值         : 应答字节数，静默丢弃为零。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-10 change
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-11 change
 {
     u8 xdata *out;
     u8 data_length;
@@ -2152,7 +2170,8 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-10 change
             data_length = bf4g_read_history(out, data_length);
             break;
         case 5:
-            data_length = bf4g_read_main(out, data_length);
+        case 6:
+            data_length = bf4g_read_summary(out, data_length, frame[5] == 6);
             break;
         case 0x10:
             data_length = bf4g_write_parameter(out, data_length);

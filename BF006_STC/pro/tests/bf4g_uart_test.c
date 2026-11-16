@@ -1507,6 +1507,129 @@ static void check_main_summary_fields(void) //20261116-10 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_web_summary_length
+ * 功能描述       : 验证串口可发送九十七字节的综合应答。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_web_summary_length(void) //20261116-11 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 6, 0, 13, 0, 0, 0};
+    u8 reply[97];
+
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x86 && reply[8] == 86 && reply[9] == 0);
+    CHECK(crc(reply, sizeof(reply)) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : summary_quality
+ * 功能描述       : 从紧凑质量区解析某项的两位质量。
+ * 输入参数       : reply，应答；item，项目号。
+ * 返回值         : 读数质量。
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static u8 summary_quality(const u8 *reply, u8 item) //20261116-11 add
+{
+    return (reply[11 + item / 4] >> (2 * (item % 4))) & 3;
+}
+
+/******************************************************************************
+ * 函数名称       : check_web_summary
+ * 功能描述       : 独立核对网页应答补充字段、公共字段偏移和连续组帧边界。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_web_summary(void) //20261116-11 add
+{
+    static const u8 tail_widths[] = {2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 1};
+    static const u8 tail_qualities[] = {
+        TEST_PUMPS == 2 ? 0 : 1,
+        TEST_PUMPS == 2 && TEST_PHASES == 3 ? 0 : 1,
+        TEST_PUMPS == 2 && TEST_PHASES == 3 ? 0 : 1,
+        TEST_PUMPS == 2 ? 0 : 1, TEST_PUMPS == 2 ? 3 : 1,
+        TEST_PUMPS == 2 ? 0 : 1, TEST_PUMPS == 2 ? 0 : 1, 0, 0, 0, 0
+    };
+    static const u32 tail_values[] = {
+        TEST_PUMPS == 2 ? 78 : 0,
+        TEST_PUMPS == 2 && TEST_PHASES == 3 ? 90 : 0,
+        TEST_PUMPS == 2 && TEST_PHASES == 3 ? 123 : 0,
+        55, 901, 1, 8999, (TEST_MODEL_BYTE << 8) | 0x93, 201, 0x146, 2
+    };
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 5, 0x88, 0x77, 0, 0, 0};
+    u8 poison[97];
+    u8 brief[74];
+    u8 reply[97];
+    u8 i;
+    u8 j;
+    u8 offset = 65;
+    u32 value;
+
+    dashboard_fixture();
+    sys.Current_A2 = 78;
+#if TEST_PHASES == 3
+    sys.Current_B2 = 90;
+    sys.Current_C2 = 123;
+#endif
+    sys.Fault_Error = 6;
+    config.Set_STANDBY_Current2 = 55;
+    config.Set_OVERLOAD_Current2 = 901;
+    config.Sensor_ON2 = 8999;
+
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(brief, sizeof(brief), 0);
+
+    memcpy(poison, request, 9);
+    memset(poison + 9, 0xa5, 86);
+    poison[5] = 0x61;
+    poison[8] = 86;
+    check_error(poison, sizeof(poison), 1, 0xff);
+    request[5] = 6;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x86 && reply[6] == 0x88 && reply[7] == 0x77 && reply[8] == 86);
+    CHECK(reply[9] == 0 && reply[10] == brief[10]);
+    CHECK(memcmp(reply + 11, brief + 11, 6) == 0);
+    CHECK(memcmp(reply + 20, brief + 17, 45) == 0);
+    for (i = 0; i < 11; i++) {
+        CHECK(summary_quality(reply, 24 + i) == tail_qualities[i]);
+        value = 0;
+        for (j = 0; j < tail_widths[i]; j++) {
+            value = (value << 8) | reply[offset++];
+        }
+        CHECK(value == tail_values[i]);
+    }
+    CHECK(offset == 85);
+    CHECK((reply[19] & 0xc0) == 0);
+    for (i = 85; i < 95; i++) {
+        CHECK(reply[i] == 0);
+    }
+    CHECK(crc(reply, sizeof(reply)) == 0);
+
+    sys.Fault_Error = 0x90000001UL;
+    config.Pump_AB_Mode = 9;
+    sys.Voltage_Line = 222;
+    voltage_sample_ready = 1;
+    send_request(request, sizeof(request));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(summary_quality(reply, 0) == 0 && reply[20] == 0 && reply[21] == 222);
+    CHECK(summary_quality(reply, 5) == 3 && reply[30] == 0x90 && reply[33] == 1);
+    CHECK(summary_quality(reply, 29) == (TEST_PUMPS == 2 ? 3 : 1) && reply[75] == 9);
+    CHECK(summary_quality(reply, 33) == 3 && reply[82] == 0 && reply[83] == 0);
+    CHECK((reply[19] & 0xc0) == 0);
+    for (i = 85; i < 95; i++) {
+        CHECK(reply[i] == 0);
+    }
+    CHECK(crc(reply, sizeof(reply)) == 0);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1594,6 +1717,8 @@ int main(void) //20261116-0 add
     check_display_digits();
     check_main_summary_length();
     check_main_summary_fields();
+    check_web_summary_length();
+    check_web_summary();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }
