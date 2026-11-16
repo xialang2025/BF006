@@ -68,6 +68,8 @@ def run_model(model, model_byte, phases, pumps, volts):
         system_source = (SRC / "system.c").read_text(encoding="cp936")
         readiness = system_source[system_source.index("static volatile bit water_inputs_ready"):
                                   system_source.index("bit sensor_alarm_pending;") + len("bit sensor_alarm_pending;")]
+        init_start = system_source.index("void sys_init(void)")
+        init = system_source[init_start:system_source.index("\n}", init_start) + 2]
         sampling = system_source[system_source.index("void Water_Level(void)"):
                                  system_source.index("static bit cycle_pump_ready(void)")]
         scaling = system_source[system_source.index("void updatSysdata(void)"):
@@ -93,10 +95,10 @@ def run_model(model, model_byte, phases, pumps, volts):
                                      system_source.index("void Customer_Test_Limit_Handle(void)")]
         recovery_limit = re.search(r"^#define Fault_UVP_Recovery_Time \d+", system_source, re.MULTILINE)[0]
         (directory / "sampling.c").write_text(
-            '#include "system.h"\n#include "ad.h"\n#include "contact_overload.h"\n'
+            '#include <string.h>\n#include "system.h"\n#include "ad.h"\n#include "contact_overload.h"\n'
             'extern void Speak_Con(u8 value);\nextern void Speak_Stop(void);\n'
             + recovery_limit + "\n"
-            + readiness + "\n" + scaling + sampling + cycle + rust + "\n"
+            + readiness + "\n" + init + "\n" + scaling + sampling + cycle + rust + "\n"
             + error_state + fault_checks + voltage_checks + recovery
             + indications + clear_faults + contact, encoding="utf-8"
         )

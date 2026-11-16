@@ -30,6 +30,8 @@ u8 LCD_WATER_Llevel1, LCD_WATER_Llevel2, LCD_WATER_Llevel3,
 
 void UART4_int(void);
 void UART4_Timer3_int(void);
+void sys_init(void);
+void Water_Level(void);
 void shuiwei_check(void);
 void Timer_mode(void);
 void RELAY_Auto_Control(void);
@@ -1820,6 +1822,93 @@ static void check_rf_during_summary(void) //20261116-12 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_sensor_startup
+ * 功能描述       : 模拟外部数据区带有上次运行的传感器状态，检查系统上电初始化。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_sensor_startup(void) //20261116-14 add
+{
+    u16 i;
+
+    sys_init();
+    for (i = 0; i < 132; i++) {
+        Water_Level();
+    }
+    water_status_ready = 0;
+    shuiwei_check();
+    shuiwei_check();
+    CHECK(!water_status_ready);
+
+    sensor_pending_tanks = SENSOR_PENDING_UPPER | SENSOR_PENDING_LOWER;
+    sys_init();
+    CHECK(sensor_pending_tanks == 0);
+    shuiwei_check();
+    shuiwei_check();
+    CHECK(!water_status_ready);
+    shuiwei_check();
+    CHECK(water_status_ready);
+}
+
+/******************************************************************************
+ * 函数名称       : check_sensor_switch_hysteresis
+ * 功能描述       : 确认传感器切换后首次新样本使用新类型的档位状态。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+static void check_sensor_switch_hysteresis(void) //20261116-14 add
+{
+    static const u32 middle_level[] = {1};
+    static const u32 invalid_value[] = {0};
+    static const u8 valid[] = {0};
+    static const u8 invalid[] = {3};
+
+    config.Dev_Address = 1;
+    config_loaded = 1;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_PRESS0_5V;
+    config.Sensor_Mode = CTROLTYPE_PUMP;
+    config.Sensor_Rang = 1000;
+    config.Sensor_STOP = 900;
+    config.Sensor_ON1 = 500;
+    config.Sensor_ON2 = 300;
+    Boot_Flag = sensor_adc_fresh = 1;
+    sys.Vol_AD = 1023;
+    updatSysdata();
+    shuiwei_check();
+    RELAY_Auto_Control();
+    CHECK(sys.SensorLever == 2);
+    write_parameter_request(18, SENSORTYPE_WATER4_20MA);
+    sys.Auto_Mode = config.Auto_Mode;
+    shuiwei_check();
+    RELAY_Auto_Control();
+
+    sys.Cur_AD = 668;                 // 新输入处于第一启动阈值和停止阈值之间。
+    sensor_adc_fresh = 1;
+    shuiwei_check();
+    RELAY_Auto_Control();
+    read_runtime(21, 1, middle_level, valid);
+    sys.Cur_AD = 99;
+    shuiwei_check();
+    RELAY_Auto_Control();
+    read_runtime(21, 1, invalid_value, invalid);
+    CHECK(sys.SensorLever == 1);    // 异常采样不能改写已建立的档位状态。
+
+    config.Hand_Auto_timer_Flag = RUNMODE_TIMER;
+    config.Sensor_Mode = CTROLTYPE_DRAIN;
+    config.AUTO_Timing_Run = 1;
+    config.AUTO_Timing_Stop = 1;
+    sys.Auto_timer_count = 0;
+    sys.autoTimerFlag = 1;
+    sys.shang_DIR = 1;
+    sensor_sample_ready = 0;
+    RELAY_Auto_Control();
+    CHECK(sys.Pump_Flag == 0);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -1912,6 +2001,8 @@ int main(void) //20261116-0 add
     check_final_vectors();
     check_long_send_integration();
     check_rf_during_summary();
+    check_sensor_switch_hysteresis();
+    check_sensor_startup();
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

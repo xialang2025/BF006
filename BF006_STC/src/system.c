@@ -20,19 +20,30 @@ sys_t sys;
 
 bit Boot_Flag = 0;
 static volatile bit water_inputs_ready; //20261116-2 add 完成首轮水池输入去抖。
+static u8 water_startup_scans; //20261116-14 change 由系统初始化显式清零的水位扫描计数。
 bit water_status_ready;
 bit sensor_sample_ready;
-u8 sensor_pending_tanks; //20261116-6 add 保留待重新计算的水池选择。
+u8 sensor_pending_tanks; //20261116-14 change 由系统初始化显式清除的待重算水池。
 bit sensor_alarm_pending;
 
 #if (CUSTOMER_TEST_LIMIT_ENABLE == 1)
 static bit Customer_Test_Limit_Fault = 0; //20260501-0 add customer test time-limit fault lock flag for the current power cycle
 #endif
 
-void sys_init(void)
+/******************************************************************************
+ * 函数名称       : sys_init
+ * 功能描述       : 初始化系统运行状态及水位扫描所用的外部数据。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.16
+ ******************************************************************************/
+void sys_init(void) //20261116-14 change
 {
     memset(&sys, 0, sizeof(sys_t));
     sys.xia_DIR = 1;
+    // 工程启动代码不清外部数据区，独立状态须在开放中断前明确复位。
+    water_startup_scans = 0;
+    sensor_pending_tanks = 0;
 }
 #if (Function_RS485 == 1)
 void Record_Clr_and_Reset(void)
@@ -419,7 +430,6 @@ void sensorOverFlowCheck(void) //20261116-6 change
  ******************************************************************************/
 void shuiwei_check(void) //20261116-6 change
 {
-    static u8 water_startup_scans;
     bit analog_ready;
     bit tanks_ready = water_inputs_ready;
     bit interrupts = EA;
@@ -598,8 +608,10 @@ static void cycle_scan(void) //20261116-5 add
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-void RELAY_Auto_Control(void) //20261116-6 change
+void RELAY_Auto_Control(void) //20261116-14 change
 {
+    bit level_sample_valid = sensor_sample_ready && !sys.sensor_err;
+
     if (config.Hand_Auto_timer_Flag == RUNMODE_AUTO)
     {
         if (config.Sensor_Mode == CTROLTYPE_PUMP) // sensor is installed on upper tank
@@ -807,8 +819,7 @@ void RELAY_Auto_Control(void) //20261116-6 change
 
     if (config.Sensor_Mode == CTROLTYPE_PUMP) // sensor is installed on upper tank
     {
-        if (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA) // ?λ
-        {
+        if (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA && level_sample_valid) {
 #if (Model_OUT == Model_1C2)
             if (sys.SensorOut >= sys.Sensor_STOP)
             {
@@ -854,8 +865,7 @@ void RELAY_Auto_Control(void) //20261116-6 change
     else
     { // sensor is installed on lower tank
 
-        if (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA) // ?λ
-        {
+        if (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA && level_sample_valid) {
 #if (Model_OUT == Model_1C2)
             if (sys.SensorOut >= sys.Sensor_ON2)
             {
@@ -884,12 +894,11 @@ void RELAY_Auto_Control(void) //20261116-6 change
             }
 
 #endif
+        }
 
-            if (sys.shang_DIR == 1)
-            {
-
-                sys.Pump_Flag = 0;
-            }
+        // 等待有效采样时也保留上池高位对排水的限制。
+        if (sys.Auto_Mode >= SENSORTYPE_WATER4_20MA && sys.shang_DIR == 1) {
+            sys.Pump_Flag = 0;
         }
     }
     if (sys.Auto_Mode == config.Auto_Mode &&
