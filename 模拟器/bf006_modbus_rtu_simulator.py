@@ -441,7 +441,9 @@ class Bf006State:
         self.phases = 1
         self.rated_voltage = 220
         self.phase_currents: dict[int, int] = {}
-        self.pending_tanks: set[int] = set()
+        #20261117-4 change：运行档位与六段位图分别由运行状态和液位样本提供。
+        self.pending_tank_levels: set[int] = set()
+        self.pending_tank_segments: set[int] = set()
         self.sensor_alarm_pending = False
         self.running_sensor_type = 0
         self.adc_sample_valid = False
@@ -506,13 +508,15 @@ class Bf006State:
         if sensor_status < 0 or sensor_status > 0x1F:
             raise ValueError("传感器状态只允许使用 bit0-bit4")
 
-        self.parameter_values[0x0012] = sensor_type
-        self.parameter_values[0x000D] = sensor_target
+        #20261117-4 change：发布连续样本和两池显示位图；类型或方向变化时另行刷新运行档位。
+        if (sensor_type, sensor_target) != (self.parameter_values[18], self.parameter_values[13]):
+            self.pending_tank_levels.update((0, 1))
+        self.parameter_values[18] = sensor_type
+        self.parameter_values[13] = sensor_target
         self.sensor_value = sensor_value
-        #20261117-2 change：显式注入完成传感器类型、工程值和两侧水池的采样发布。
         self.running_sensor_type = sensor_type
         self.sensor_sample_type = sensor_type
-        self.pending_tanks.clear()
+        self.pending_tank_segments.clear()
         self.sensor_alarm_pending = False
         self.sensor_level = sensor_level
         self.upper_water_segments = upper_segments
@@ -527,7 +531,7 @@ class Bf006State:
             return 2
         return 0
 
-    def set_parameter_value(self, address: int, value: int) -> None:  #20261117-2 add
+    def set_parameter_value(self, address: int, value: int) -> None:  #20261117-4 change
         """发布已由调用方校验的参数值并标记失效的传感器来源。"""
         if value == self.parameter_values[address]:
             return
@@ -536,11 +540,13 @@ class Bf006State:
         if address == 12:
             self.pump_ab_mode = value
         if address in (13, 18):
-            self.pending_tanks.update((0, 1))
+            self.pending_tank_levels.update((0, 1))
+            self.pending_tank_segments.update((0, 1))
+        elif address in (14, 15, 16, 17) and self.parameter_values[18] >= 2:
+            self.pending_tank_levels.add(self.parameter_values[13])
+            self.pending_tank_segments.add(self.parameter_values[13])
         if address in (14, 18):
             self.sensor_sample_type = None
-        if address in (14, 15, 16, 17) and self.parameter_values[18] >= 2:
-            self.pending_tanks.add(self.parameter_values[13])
         if address == 20:
             self.sensor_alarm_pending = (
                 self.sensor_sample_type != self.parameter_values[18]
@@ -945,7 +951,7 @@ class Bf006Uart4Protocol:  #20261117-2 add
             else:
                 quality = 3
         levels = state.upper_water_level, state.bottom_water_level
-        if state.pending_tanks:
+        if state.pending_tank_levels:
             quality = 2
         elif any(level not in (0, 1, 2) for level in levels):
             quality = 3
@@ -974,7 +980,7 @@ class Bf006Uart4Protocol:  #20261117-2 add
                 invalid |= UART4_PHASE_FAULTS
             if not self.dual_pump:
                 invalid |= UART4_B_PUMP_FAULTS
-            if number == 11 and state.pending_tanks:
+            if number == 11 and state.pending_tank_levels:
                 return 2, 0
             if faults & invalid:
                 return 3, faults if number == 10 else 0
@@ -990,7 +996,8 @@ class Bf006Uart4Protocol:  #20261117-2 add
             alarm |= 0x100 if state.bottom_water_level == 0 else 0
             return 0, alarm
         if 12 <= number <= 15:
-            if (number & 1) in state.pending_tanks:
+            pending = state.pending_tank_segments if number < 14 else state.pending_tank_levels
+            if (number & 1) in pending:
                 return 2, 0
             value = (
                 state.upper_water_segments, state.bottom_water_segments,
@@ -1025,7 +1032,7 @@ class Bf006Uart4Protocol:  #20261117-2 add
         sampled = state.sensor_sample_type == sensor_type
         flags = state.manual_sensor_status & 0x1D
         if number == 17:
-            if state.pending_tanks or state.sensor_alarm_pending or (continuous and not sampled):
+            if state.pending_tank_levels or state.sensor_alarm_pending or (continuous and not sampled):
                 return 2, 0
             if continuous and not flags & 1 and state.sensor_value > state.parameter_values[20] * 10:
                 flags |= 2
@@ -1034,7 +1041,8 @@ class Bf006Uart4Protocol:  #20261117-2 add
             return 0, flags
         if not continuous:
             return 1, 0
-        if not sampled or (number == 21 and state.pending_tanks):
+        # 连续档位和显示位图来自同一次液位注入，运行档位单独发布。
+        if not sampled or (number == 21 and state.parameter_values[13] in state.pending_tank_segments):
             return 2, 0
         if flags & 1:
             return 3, 0
@@ -2263,7 +2271,7 @@ class SimulatorGui:
             self.state.sensor_value = self.state.sensor_out
             self.state.running_sensor_type = self.state.parameter_values[18]
             self.state.sensor_sample_type = self.state.running_sensor_type
-            self.state.pending_tanks.clear()
+            self.state.pending_tank_levels.clear()
             self.state.sensor_alarm_pending = False
             self.state.adc_sample_valid = True  #20261117-2 change：显式提交零电流也算有效采样。
         self._refresh_views(load_editors=True)
@@ -3019,7 +3027,7 @@ def execute_cli_tokens(
             state.parameter_values[0x000C] = pump_mode
             state.upper_water_level = upper_level
             state.bottom_water_level = lower_level
-            state.pending_tanks.clear()
+            state.pending_tank_levels.clear()
             state.add_pump_or_overflow = add_pump
             return {"ok": True, "command": operation, "state": build_status_payload(simulator)}
         if len(tokens) >= 3 and tokens[:2] == ["measurement", "set"]:
