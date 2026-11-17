@@ -3281,12 +3281,17 @@ def execute_cli_tokens(
         if len(tokens) >= 2 and tokens[0] == "frame":
             uart4 = tokens[1] == "--uart4"
             request_frame = bytes.fromhex(" ".join(tokens[2:] if uart4 else tokens[1:]))
-            if uart4 and device_bus is not None:
-                if request_frame and request_frame[0] != simulator.slave_address:
-                    raise ValueError("报文地址与 @ 指定设备不一致")
-                response = device_bus.handle_frame(request_frame, uart4=True)
+            request_address = request_frame[0] if request_frame else simulator.slave_address
+            matches_target = request_address == simulator.slave_address or (
+                not uart4 and request_address == BF006_PRIVATE_BROADCAST_ADDRESS
+            )
+            if device_bus is not None and matches_target:  #20261117-3 change
+                # 两种协议通过总线校验地址占用，并在改址后同步设备索引。
+                response = device_bus.handle_frame(request_frame, uart4=uart4)
                 result = device_bus.last_result
             else:
+                if uart4 and device_bus is not None:
+                    raise ValueError("报文地址与 @ 指定设备不一致")
                 response = simulator.handle_uart4_frame(request_frame) if uart4 else simulator.handle_frame(request_frame)
                 result = simulator.last_result
             return {
