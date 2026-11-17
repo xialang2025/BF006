@@ -1,0 +1,46 @@
+{
+  "port": "COM6",
+  "load": "独立空载测试板",
+  "steps": [
+    {
+      "step": "启动后轮询",
+      "mode": 0,
+      "state": 4721
+    },
+    {
+      "step": "双泵停止后轮询",
+      "mode": 0,
+      "state": 4721
+    },
+    {
+      "step": "双泵停止后轮询",
+      "mode": 0,
+      "state": 4673
+    }
+  ],
+  "passed": true,
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "before": {
+    "mode": 0,
+    "state": 4673
+  },
+  "start_response": {
+    "state": 4673,
+    "faults": 0
+  },
+  "stop_response": {
+    "state": 4721,
+    "faults": 0
+  },
+  "final": {
+    "mode": 0,
+    "state": 4673
+  },
+  "stopped": true
+}

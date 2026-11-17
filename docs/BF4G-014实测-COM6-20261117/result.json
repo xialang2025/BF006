@@ -1,0 +1,9 @@
+{
+  "command": "run",
+  "port": "COM6",
+  "physical_observation": "未执行",
+  "error": "could not open port 'COM6': PermissionError(13, '拒绝访问。', None, 5)",
+  "passed": false,
+  "follow_up_note": "首次打开COM6时被本机串口软件占用；traffic.jsonl为空，未发送任何TX。释放端口后已完成后续测试。",
+  "superseded_by": "只读检查/result.json、10H参数与改址/result.json、报文边界与错帧恢复复测/result.json、11H双泵启停/result.json、最终恢复复核/result.json"
+}

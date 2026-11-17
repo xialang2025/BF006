@@ -1,0 +1,308 @@
+{
+  "format": 1,
+  "transport": "serial",
+  "port": "COM6",
+  "board": "BF006-COM6",
+  "address": 1,
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "mode_before": null,
+  "before": {
+    "parameters": [
+      {
+        "q": 0,
+        "value": 260
+      },
+      {
+        "q": 0,
+        "value": 150
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 100
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 100
+      },
+      {
+        "q": 0,
+        "value": 30
+      },
+      {
+        "q": 0,
+        "value": 60
+      },
+      {
+        "q": 0,
+        "value": 30
+      },
+      {
+        "q": 0,
+        "value": 30
+      },
+      {
+        "q": 0,
+        "value": 99
+      },
+      {
+        "q": 0,
+        "value": 1
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 10
+      },
+      {
+        "q": 0,
+        "value": 9
+      },
+      {
+        "q": 0,
+        "value": 5
+      },
+      {
+        "q": 0,
+        "value": 1
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 10
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      }
+    ],
+    "runtime": [
+      {
+        "q": 0,
+        "value": 225
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 1,
+        "value": 0
+      },
+      {
+        "q": 1,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 1,
+        "value": 0
+      },
+      {
+        "q": 1,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 4673
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 256
+      },
+      {
+        "q": 0,
+        "value": 3
+      },
+      {
+        "q": 0,
+        "value": 3
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 1,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 1,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 41875
+      },
+      {
+        "q": 0,
+        "value": 201
+      },
+      {
+        "q": 1,
+        "value": 0
+      }
+    ],
+    "history": [
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      },
+      {
+        "q": 4,
+        "value": {
+          "fault": 17,
+          "volts": 0,
+          "current_tenths": 0
+        }
+      }
+    ],
+    "summaries": {
+      "05": "000250001000000000E10000000000001241000000000303000000000000000000000A00050009000A0104009600640000001E003C00000000000000000000",
+      "06": "000250001000000014001000E10000000000001241000000000303000000000000000000000A00050009000A0104009600640000001E003C00000000000000000064000001A39300C901000000000000000000000000"
+    }
+  },
+  "pending": {},
+  "checked": [
+    {
+      "item": "3",
+      "original": 100,
+      "restored_by_write": true
+    },
+    {
+      "item": "11",
+      "original": 1,
+      "restored_by_write": true
+    }
+  ]
+}

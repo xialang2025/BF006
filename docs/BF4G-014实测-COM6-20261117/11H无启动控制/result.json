@@ -1,0 +1,150 @@
+{
+  "port": "COM6",
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "control_cases": [
+    {
+      "action": "停全部",
+      "target": 3,
+      "status": "成功",
+      "state": 4673,
+      "faults": 0
+    },
+    {
+      "action": 1,
+      "target": 0,
+      "status": "04H",
+      "object": 1
+    },
+    {
+      "action": 3,
+      "target": 1,
+      "status": "04H",
+      "object": 3
+    },
+    {
+      "action": 7,
+      "target": 0,
+      "status": "04H",
+      "object": 7
+    }
+  ],
+  "physical_observation": "未测试",
+  "before": {
+    "mode": 0,
+    "state": 4673,
+    "faults": {
+      "q": 0,
+      "value": 0
+    }
+  },
+  "final": {
+    "mode": 0,
+    "state": 4673,
+    "faults": {
+      "q": 0,
+      "value": 0
+    },
+    "parameters": [
+      {
+        "q": 0,
+        "value": 260
+      },
+      {
+        "q": 0,
+        "value": 150
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 100
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 100
+      },
+      {
+        "q": 0,
+        "value": 30
+      },
+      {
+        "q": 0,
+        "value": 60
+      },
+      {
+        "q": 0,
+        "value": 30
+      },
+      {
+        "q": 0,
+        "value": 30
+      },
+      {
+        "q": 0,
+        "value": 99
+      },
+      {
+        "q": 0,
+        "value": 1
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 10
+      },
+      {
+        "q": 0,
+        "value": 9
+      },
+      {
+        "q": 0,
+        "value": 5
+      },
+      {
+        "q": 0,
+        "value": 1
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 10
+      },
+      {
+        "q": 0,
+        "value": 0
+      },
+      {
+        "q": 0,
+        "value": 0
+      }
+    ]
+  },
+  "restored": true,
+  "passed": true
+}

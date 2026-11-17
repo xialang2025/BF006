@@ -1,0 +1,45 @@
+{
+  "port": "COM6",
+  "load": "无，用户确认独立空载测试板",
+  "cases": [
+    {
+      "case": "A泵启动",
+      "result": "已受理",
+      "state": 4689
+    },
+    {
+      "case": "A泵停止",
+      "result": "已受理",
+      "state": 4673
+    },
+    {
+      "case": "B泵启动",
+      "result": "已受理",
+      "state": 4705
+    }
+  ],
+  "recovery": {
+    "attempted": true,
+    "mode": 0,
+    "state": 4673
+  },
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "before": {
+    "mode": 0,
+    "state": 4673,
+    "faults": {
+      "q": 0,
+      "value": 0
+    }
+  },
+  "error": "B泵停止后运行状态位未清",
+  "passed": false,
+  "follow_up_note": "首次脚本将控制应答及紧接着的状态读取视为最终停机结果，未等待运行状态刷新。后续B泵单独停机轮询和双泵停机轮询均确认运行位清零；最终恢复复核也通过。",
+  "superseded_by": "11H_B泵停止时序复测/result.json、11H双泵启停/result.json、最终恢复复核/result.json"
+}

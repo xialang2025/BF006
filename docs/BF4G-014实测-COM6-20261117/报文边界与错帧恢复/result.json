@@ -1,0 +1,66 @@
+{
+  "port": "COM6",
+  "passed": false,
+  "completed_cases": 14,
+  "results": [
+    {
+      "case": "02H数量为零",
+      "result": "STATUS=03 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "02H数量超过上限",
+      "result": "STATUS=03 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "02H参数区间跨末尾",
+      "result": "STATUS=03 OBJ=16 MIN=0 MAX=0"
+    },
+    {
+      "case": "02H起始参数号不存在",
+      "result": "STATUS=04 OBJ=17 MIN=0 MAX=0"
+    },
+    {
+      "case": "03H运行字段数量超过上限",
+      "result": "STATUS=03 OBJ=01 MIN=0 MAX=0"
+    },
+    {
+      "case": "03H运行字段区间跨末尾",
+      "result": "STATUS=03 OBJ=18 MIN=0 MAX=0"
+    },
+    {
+      "case": "03H起始字段零无效",
+      "result": "STATUS=04 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "04H历史区间数量超过上限",
+      "result": "STATUS=03 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "04H历史区间跨末尾",
+      "result": "STATUS=03 OBJ=09 MIN=0 MAX=0"
+    },
+    {
+      "case": "04H起始历史槽不存在",
+      "result": "STATUS=04 OBJ=0A MIN=0 MAX=0"
+    },
+    {
+      "case": "01H带数据",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "05H带数据",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "06H带数据",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "不支持的07H命令",
+      "result": "STATUS=01 OBJ=FF MIN=0 MAX=0"
+    }
+  ],
+  "error": "('旧FMT格式拒绝', 27, '0143bf060381010f100000a39300c9010200dc001f611009085262')",
+  "follow_up_note": "此首次尝试未得到预期旧FMT拒绝，实际收到了27字节的有效查询应答。属于测试帧构造／判定问题；保留原始记录，正确复测结果见报文边界与错帧恢复复测/result.json。该次没有参数或模式写入。",
+  "superseded_by": "报文边界与错帧恢复复测/result.json"
+}

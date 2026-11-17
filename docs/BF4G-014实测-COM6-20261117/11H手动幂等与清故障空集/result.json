@@ -1,0 +1,23 @@
+{
+  "port": "COM6",
+  "command": "11H",
+  "physical_observation": "继电器未能以读取值代替实物观察",
+  "same_manual_mode": {
+    "accepted": true,
+    "before": 4673,
+    "after": 4673
+  },
+  "clear_fault_with_zero_faults": {
+    "accepted": true,
+    "before": {
+      "q": 0,
+      "value": 0
+    },
+    "after": {
+      "q": 0,
+      "value": 0
+    },
+    "status_faults": 0
+  },
+  "passed": true
+}

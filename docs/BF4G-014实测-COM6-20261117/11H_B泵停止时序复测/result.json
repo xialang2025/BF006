@@ -1,0 +1,50 @@
+{
+  "port": "COM6",
+  "load": "独立空载测试板",
+  "mode_before": 0,
+  "steps": [
+    {
+      "step": "停止B幂等基线",
+      "mode": 0,
+      "state": 4673
+    },
+    {
+      "step": "启动B应答",
+      "state": 4673,
+      "faults": 0
+    },
+    {
+      "step": "启动后轮询",
+      "mode": 0,
+      "state": 4705,
+      "elapsed_s": 0.078
+    },
+    {
+      "step": "单独停止B后轮询",
+      "mode": 0,
+      "state": 4673,
+      "elapsed_s": 0.077
+    }
+  ],
+  "passed": true,
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "before": {
+    "mode": 0,
+    "state": 4673
+  },
+  "stop_response": {
+    "state": 4705,
+    "faults": 0
+  },
+  "single_stop_cleared": true,
+  "final": {
+    "mode": 0,
+    "state": 4673
+  }
+}

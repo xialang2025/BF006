@@ -1,0 +1,36 @@
+{
+  "command": "run",
+  "port": "COM6",
+  "physical_observation": "未执行",
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "backup": "Z:\\Project\\vscode_prj_temp\\变频器项目\\泵福\\BF006\\docs\\BF4G-014实测-COM6-20261117\\10H参数与改址\\backup.json",
+  "read_commands": [
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06"
+  ],
+  "write_checked": true,
+  "pending": {},
+  "checked": [
+    {
+      "item": "3",
+      "original": 100,
+      "restored_by_write": true
+    },
+    {
+      "item": "11",
+      "original": 1,
+      "restored_by_write": true
+    }
+  ],
+  "passed": true
+}

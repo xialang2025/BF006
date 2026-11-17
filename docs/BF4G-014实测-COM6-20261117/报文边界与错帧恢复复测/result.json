@@ -1,0 +1,142 @@
+{
+  "port": "COM6",
+  "passed": true,
+  "completed_cases": 29,
+  "results": [
+    {
+      "case": "02H数量为零",
+      "result": "STATUS=03 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "02H数量超过上限",
+      "result": "STATUS=03 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "02H参数区间跨末尾",
+      "result": "STATUS=03 OBJ=16 MIN=0 MAX=0"
+    },
+    {
+      "case": "02H起始参数号不存在",
+      "result": "STATUS=04 OBJ=17 MIN=0 MAX=0"
+    },
+    {
+      "case": "03H运行字段数量超过上限",
+      "result": "STATUS=03 OBJ=01 MIN=0 MAX=0"
+    },
+    {
+      "case": "03H运行字段区间跨末尾",
+      "result": "STATUS=03 OBJ=18 MIN=0 MAX=0"
+    },
+    {
+      "case": "03H起始字段零无效",
+      "result": "STATUS=04 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "04H历史区间数量超过上限",
+      "result": "STATUS=03 OBJ=00 MIN=0 MAX=0"
+    },
+    {
+      "case": "04H历史区间跨末尾",
+      "result": "STATUS=03 OBJ=09 MIN=0 MAX=0"
+    },
+    {
+      "case": "04H起始历史槽不存在",
+      "result": "STATUS=04 OBJ=0A MIN=0 MAX=0"
+    },
+    {
+      "case": "01H带数据",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "05H带数据",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "06H带数据",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "不支持的07H命令",
+      "result": "STATUS=01 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "旧FMT 02H",
+      "result": "STATUS=02 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "RID 0000H",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "LEN与实际长度不符",
+      "result": "STATUS=03 OBJ=FF MIN=0 MAX=0"
+    },
+    {
+      "case": "CRC错误静默",
+      "result": "静默"
+    },
+    {
+      "case": "CRC错误后恢复查询",
+      "result": "成功，27字节"
+    },
+    {
+      "case": "截断为8字节",
+      "result": "静默"
+    },
+    {
+      "case": "截断后恢复查询",
+      "result": "成功，27字节"
+    },
+    {
+      "case": "10H长度错误",
+      "result": "STATUS=03 OBJ=17 MIN=0 MAX=0"
+    },
+    {
+      "case": "10H参数23不存在",
+      "result": "STATUS=04 OBJ=17 MIN=0 MAX=0"
+    },
+    {
+      "case": "10H P-21只读",
+      "result": "STATUS=05 OBJ=15 MIN=0 MAX=0"
+    },
+    {
+      "case": "10H P-22只读",
+      "result": "STATUS=05 OBJ=16 MIN=0 MAX=0"
+    },
+    {
+      "case": "10H P-18枚举越界",
+      "result": "STATUS=07 OBJ=12 MIN=0 MAX=4"
+    },
+    {
+      "case": "10H P-15越过P-14",
+      "result": "STATUS=07 OBJ=0F MIN=0 MAX=10"
+    },
+    {
+      "case": "末尾 P-11 地址确认",
+      "result": "成功，17字节"
+    },
+    {
+      "case": "末尾运行状态",
+      "result": "成功，19字节"
+    }
+  ],
+  "cases": 29,
+  "final_state": {
+    "device": {
+      "phases": 1,
+      "pumps": 2,
+      "volts": 220,
+      "revision": 0,
+      "legacy_version": 201
+    },
+    "mode": 0,
+    "state": 4673,
+    "faults": {
+      "q": 0,
+      "value": 0
+    },
+    "parameters_match_original_snapshot": true,
+    "address": 1
+  },
+  "harness_note": "第一次复测把运行状态字段的取值偏移错读为数量与Q。现场应答与协议一致，现已单独重新查询并核对设备、模式、故障和全部23项原参数。"
+}

@@ -1,0 +1,17 @@
+{
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "mode": 0,
+  "state": 4673,
+  "faults": {
+    "q": 0,
+    "value": 0
+  },
+  "parameters_match_original_snapshot": true,
+  "address": 1
+}

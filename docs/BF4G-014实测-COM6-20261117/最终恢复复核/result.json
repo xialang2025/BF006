@@ -1,0 +1,205 @@
+{
+  "port": "COM6",
+  "passed": true,
+  "device": {
+    "phases": 1,
+    "pumps": 2,
+    "volts": 220,
+    "revision": 0,
+    "legacy_version": 201
+  },
+  "mode": 0,
+  "state": 4673,
+  "address": 1,
+  "parameters_equal_snapshot": true,
+  "history_equal_snapshot": true,
+  "fault_bitmap": {
+    "q": 0,
+    "value": 0
+  },
+  "state_bits": {
+    "pump_a": false,
+    "pump_b": false
+  },
+  "runtime_quality": 0,
+  "current_runtime": [
+    {
+      "q": 0,
+      "value": 225
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 1,
+      "value": 0
+    },
+    {
+      "q": 1,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 1,
+      "value": 0
+    },
+    {
+      "q": 1,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 4673
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 256
+    },
+    {
+      "q": 0,
+      "value": 3
+    },
+    {
+      "q": 0,
+      "value": 3
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 1,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 0
+    },
+    {
+      "q": 1,
+      "value": 0
+    },
+    {
+      "q": 0,
+      "value": 41875
+    },
+    {
+      "q": 0,
+      "value": 201
+    },
+    {
+      "q": 1,
+      "value": 0
+    }
+  ],
+  "current_fault_history": [
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    },
+    {
+      "q": 4,
+      "value": {
+        "fault": 17,
+        "volts": 0,
+        "current_tenths": 0
+      }
+    }
+  ]
+}
