@@ -8,7 +8,9 @@
 #define S4_QUIET_RELOAD  (65536UL - MAIN_Fosc / 12 / 100)
 #define S4_TAIL_RELOAD   (65536UL - MAIN_Fosc / 12 / BaudRate4 * 2)
 
-// 定时器三仅在帧间静默或发送尾部计时，溢出后由中断停止。
+#define S4_CONTROL_TICKS 30 //20261117-7 add 每次十毫秒，最多等待三百毫秒。
+
+// 定时器三用于帧间静默、控制等待和发送尾部计时。
 #define S4_TIMER_ARM(reload) do { \
     Timer3_Stop(); \
     AUXINTIF &= ~T3IF; \
@@ -30,6 +32,7 @@ static u8 xdata s4_frame[BF4G_FRAME_MAX]; //20261116-0 add 收发交替独占同一帧。
 static volatile u8 s4_state;
 static volatile u8 s4_count;
 static volatile u8 s4_next;
+static volatile u8 s4_control_ticks; //20261117-7 add 控制等待的剩余时段数。
 static volatile bit s4_disturbed;
 #if 0 //20261113-0 del 释放旧串口的收发缓冲区、指针及接收超时状态。
 #define	TimeOutSet4		5
@@ -207,6 +210,10 @@ void UART4_Timer3_int(void) interrupt TIMER3_VECTOR //20261116-0 add
     AUXINTIF &= ~T3IF;
     if (s4_state == S4_RECEIVE) {
         s4_state = S4_READY;
+    } else if (s4_state == S4_PROCESS && s4_control_ticks != 0) { //20261117-7 add
+        if (--s4_control_ticks != 0) {
+            S4_TIMER_ARM(S4_QUIET_RELOAD);
+        }
     } else if (s4_state == S4_DRAIN && (s4_disturbed || RI4)) {
         s4_disturbed = 0;
         s4_state = S4_DISCARD;           // 发送期间有输入，等待新的完整静默。
@@ -217,24 +224,20 @@ void UART4_Timer3_int(void) interrupt TIMER3_VECTOR //20261116-0 add
 }
 
 /******************************************************************************
- * 函数名称       : uart4_service
+ * 函数名称       : uart4_finish
  * 功能描述       : 在主循环处理一条完成的请求并启动异步应答。
- * 输入参数       : None
+ * 输入参数       : length，应答帧字节数；零表示丢弃。
  * 返回值         : None
- * 日期            : 2026.11.16
+ * 日期            : 2026.11.17
  ******************************************************************************/
-void uart4_service(void) //20261116-0 add
+static void uart4_finish(u8 length) //20261117-7 add
 {
-    u8 length;
-
-    if (s4_state != S4_READY) {
-        return;
-    }
-
-    s4_state = S4_PROCESS;
-    length = bf4g_reply(s4_frame, s4_count);
+    bit interrupts = EA;
     // 禁止两个串口状态中断在移交所有权和写首字节之间运行。
     EA = 0;
+    Timer3_Stop();
+    AUXINTIF &= ~T3IF;                 // 撤销控制等待，发送尾部会重新启用定时器。
+    s4_control_ticks = 0;
     if (length != 0) {
         s4_count = length;
         s4_next = 1;
@@ -247,7 +250,58 @@ void uart4_service(void) //20261116-0 add
     } else {
         s4_state = S4_IDLE;
     }
-    EA = 1;
+    EA = interrupts;
+}
+
+/******************************************************************************
+ * 函数名称       : uart4_service
+ * 功能描述       : 处理完整请求或已到期的控制应答，主循环可继续扫描。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.17
+ ******************************************************************************/
+void uart4_service(void) //20261117-7 change
+{
+    u8 length;
+
+    if (s4_state == S4_PROCESS) {
+        if (s4_control_ticks == 0) {
+            uart4_finish(bf4g_control_result(s4_frame, 1));
+        }
+        return;
+    }
+    if (s4_state != S4_READY) {
+        return;
+    }
+
+    s4_state = S4_PROCESS;             // 独占共享帧，等待期间不接收下一笔请求。
+    length = bf4g_reply(s4_frame, s4_count);
+    if (length == BF4G_REPLY_PENDING) {
+        s4_control_ticks = S4_CONTROL_TICKS;
+        S4_TIMER_ARM(S4_QUIET_RELOAD);
+        return;
+    }
+
+    uart4_finish(length);
+}
+
+/******************************************************************************
+ * 函数名称       : uart4_control_scanned
+ * 功能描述       : 由主循环在正常控制扫描结束时检查待确认的控制结果。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.17
+ ******************************************************************************/
+void uart4_control_scanned(void) //20261117-7 add
+{
+    u8 length;
+
+    if (s4_state == S4_PROCESS && s4_control_ticks != 0) {
+        length = bf4g_control_result(s4_frame, 0);
+        if (length != 0) {
+            uart4_finish(length);
+        }
+    }
 }
 
 /******************************************************************************
@@ -260,4 +314,16 @@ void uart4_service(void) //20261116-0 add
 bit uart4_sending(void) //20261116-0 add
 {
     return s4_state == S4_SEND || s4_state == S4_DRAIN;
+}
+
+/******************************************************************************
+ * 函数名称       : uart4_blocks_save
+ * 功能描述       : 在控制等待、应答发送及发送尾部计时期间推迟后台擦写。
+ * 输入参数       : None
+ * 返回值         : 需要推迟后台保存时为一。
+ * 日期            : 2026.11.17
+ ******************************************************************************/
+bit uart4_blocks_save(void) //20261117-7 add
+{
+    return s4_state == S4_PROCESS || uart4_sending();
 }

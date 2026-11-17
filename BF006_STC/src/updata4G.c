@@ -1049,7 +1049,7 @@ static u16 bf4g_model_word(void) //20261116-0 add
 static void bf4g_device_info(u8 xdata *out) //20261116-0 add
 {
     out[0] = 0;
-    out[1] = 0;
+    out[1] = 1; //20261117-7 change 标识控制应答使用扫描确认后的结果。
     bf4g_put_u16(out + 2, bf4g_model_word());
     bf4g_put_u16(out + 4, MODBUS_NEW_VERSION);
     out[6] = Model_Voltage == Model_1PH ? 1 : 3;
@@ -1950,20 +1950,18 @@ static bit bf4g_start_blocked(u8 target) //20261116-8 add
 
 /******************************************************************************
  * 函数名称       : bf4g_control
- * 功能描述       : 校验请求，受理开停、模式切换或当前故障清除，返回当前诊断。
+ * 功能描述       : 校验并执行控制动作，交由正常扫描确认结果。
  * 输入参数       : out，请求及应答数据位置；length，请求数据长度。
- * 返回值         : 应答数据长度。
- * 日期            : 2026.11.16
+ * 返回值         : 拒绝应答的数据长度，或待确认标记。
+ * 日期            : 2026.11.17
  ******************************************************************************/
-static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-12 change
+static u8 bf4g_control(u8 xdata *out, u8 length) //20261117-7 change
 {
     u8 action;
     u8 target;
     u8 pumps;
     u8 mode;
-    u8 quality;
     bit interrupts;
-    bf4g_diagnostics_t xdata snapshot;
 
     if (length != 2) {
         return bf4g_error(out, 3, length ? out[0] : 0xff);
@@ -1974,8 +1972,8 @@ static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-12 change
         (action <= 2 ? (target == 0 || target > 3) : target != 0)) {
         return bf4g_error(out, 4, action);
     }
-    if (!config_loaded) {
-        return bf4g_error(out, 0x0e, action);
+    if (!config_loaded || !Boot_Flag) {
+        return bf4g_error(out, 0x0e, action); //20261117-7 change 正常控制扫描尚不可用时不执行。
     }
 
     if (action <= 2) {
@@ -2030,13 +2028,7 @@ static u8 bf4g_control(u8 xdata *out, u8 length) //20261116-12 change
         EA = interrupts;
     }
 
-    bf4g_capture_diagnostics(&snapshot);
-    out[0] = 0;
-    out[1] = action;
-    out[2] = target;
-    bf4g_put_u16(out + 3, bf4g_run_status(snapshot.mode, &quality));
-    bf4g_put_u32(out + 5, snapshot.faults);
-    return 9;
+    return BF4G_REPLY_PENDING; //20261117-7 add 统一在正常扫描后确认，故障清除返回剩余故障。
 }
 
 /******************************************************************************
@@ -2155,18 +2147,87 @@ static u8 bf4g_read_summary(u8 xdata *out, u8 length, bit extended) //20261116-1
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_seal_reply
+ * 功能描述       : 保留请求的地址和关联号，填写应答长度和校验。
+ * 输入参数       : frame，共享报文；data_length，数据字节数。
+ * 返回值         : 应答帧字节数。
+ * 日期            : 2026.11.17
+ ******************************************************************************/
+static u8 bf4g_seal_reply(u8 xdata *frame, u8 data_length) //20261117-7 add
+{
+    u8 length = BF4G_DATA + data_length;
+    u16 crc;
+
+    frame[4] = BF4G_FMT;
+    frame[5] |= 0x80;
+    frame[8] = data_length;
+    crc = bf4g_crc(frame, length);
+    frame[length++] = crc;
+    frame[length++] = crc >> 8;
+    return length;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_control_result
+ * 功能描述       : 从冻结请求及扫描后的诊断状态生成最终控制应答。
+ * 输入参数       : frame，共享报文；timed_out，等待是否已到期。
+ * 返回值         : 应答帧字节数；仍需等待时为零。
+ * 日期            : 2026.11.17
+ ******************************************************************************/
+u8 bf4g_control_result(u8 xdata *frame, bit timed_out) //20261117-7 add
+{
+    u8 xdata *out = frame + BF4G_DATA;
+    u8 action = out[0];
+    u8 target = out[1];
+    u8 mask;
+    u8 quality;
+    u16 state;
+    bit interrupts = EA;
+    bf4g_diagnostics_t xdata snapshot;
+
+    if (timed_out) {
+        return bf4g_seal_reply(frame, bf4g_error(out, 0x0a, action));
+    }
+
+    EA = 0;
+    bf4g_capture_diagnostics(&snapshot);
+    state = bf4g_run_status(snapshot.mode, &quality);
+    EA = interrupts;
+
+    if (action != 6 && snapshot.mode != (action <= 2 ? RUNMODE_MANUAL : action - 3)) {
+        return bf4g_seal_reply(frame, bf4g_error(out, 0x0a, action));
+    }
+    if (action <= 2) {
+#if (Model_OUT == Model_1C2)
+        mask = target << 4;
+#else
+        mask = 0x10;                   // 一控一的全部目标只检查唯一水泵。
+#endif
+        if ((state & mask) != (action == 1 ? mask : 0)) {
+            return 0;                  // 目标位尚未全部达到要求，等待后续扫描。
+        }
+    }
+
+    out[0] = 0;
+    out[1] = action;
+    out[2] = target;
+    bf4g_put_u16(out + 3, state);
+    bf4g_put_u32(out + 5, snapshot.faults);
+    return bf4g_seal_reply(frame, 9);
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_reply
- * 功能描述       : 校验串口请求，就地改写为应答，最后计算校验值。
+ * 功能描述       : 校验串口请求，立即组帧或保留已受理的待确认控制。
  * 输入参数       : frame，共享报文缓冲；length，实收字节数。
- * 返回值         : 应答字节数，静默丢弃为零。
+ * 返回值         : 应答字节数，静默为零，待确认返回专用标记。
  * 日期            : 2026.11.16
  ******************************************************************************/
-u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-11 change
+u8 bf4g_reply(u8 xdata *frame, u8 length) //20261117-7 change
 {
     u8 xdata *out;
     u8 data_length;
     u8 object;
-    u16 crc;
 
     if (length < BF4G_OVERHEAD || frame[1] != 0x43 ||
         frame[2] != 0xbf || frame[3] != 0x06 || (frame[5] & 0x80) ||
@@ -2221,12 +2282,8 @@ u8 bf4g_reply(u8 xdata *frame, u8 length) //20261116-11 change
         }
     }
 
-    frame[4] = BF4G_FMT;
-    frame[5] |= 0x80;
-    frame[8] = data_length;
-    length = BF4G_DATA + data_length;
-    crc = bf4g_crc(frame, length);
-    frame[length++] = crc;
-    frame[length++] = crc >> 8;
-    return length;
+    if (data_length == BF4G_REPLY_PENDING) {
+        return BF4G_REPLY_PENDING;
+    }
+    return bf4g_seal_reply(frame, data_length);
 }

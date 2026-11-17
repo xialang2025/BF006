@@ -16,6 +16,7 @@ int main(void)
     u8 request[BF4G_FRAME_MAX];
     u8 length;
     u8 sent;
+    u8 ticks;
 
     sys_init();
     memset(flash, 0xff, sizeof(flash));
@@ -33,6 +34,15 @@ int main(void)
         if (length > 0) {
             send_request(request, length);
         }
+        ticks = 0;
+        while (!uart4_sending() && (T4T3M & 0x08) && length > 5 && request[5] == 0x11) {
+            CHECK(++ticks <= 30);
+            timer_expire();
+            if (ticks % 10 == 0) {
+                scan_control();
+            }
+            uart4_service();
+        }
         sent = 0;
         while (uart4_sending() && !(T4T3M & 0x08)) {
             CHECK(sent++ < BF4G_FRAME_MAX);
@@ -43,8 +53,9 @@ int main(void)
         if (uart4_sending()) {
             timer_expire();
         }
-        RELAY_Auto_Control();
-        Sys_Control();
+        if (ticks == 0) {
+            scan_control();
+        }
         save_pro();
         puts("");
         fflush(stdout);

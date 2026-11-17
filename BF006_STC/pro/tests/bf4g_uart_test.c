@@ -241,7 +241,7 @@ static void check_info(u8 interfere) //20261116-0 add
     u8 reply[27];
     static const u8 expected[] = {
         0x01, 0x43, 0xbf, 0x06, 0x03, 0x81, 0x00, 0x01, 0x10,
-        0x00, 0x00, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8,
+        0x00, 0x01, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8,
         TEST_VOLTS & 0xff, 0x00, 0x1f, 0x61, 0x10, 0x09, 0x08
     };
 
@@ -1181,19 +1181,36 @@ static void check_address_change(void) //20261116-7 add
 }
 
 /******************************************************************************
+ * 函数名称       : scan_control
+ * 功能描述       : 模拟主循环执行保护、泵状态更新和串口结果确认。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.17
+ ******************************************************************************/
+static void scan_control(void) //20261117-7 add
+{
+    Contact_Overload_Control();
+    RELAY_Auto_Control();
+    Sys_Control();
+    uart4_control_scanned();
+}
+
+/******************************************************************************
  * 函数名称       : control_wire
  * 功能描述       : 发送远程控制并读取成功应答。
  * 输入参数       : action，动作；target，目标。
  * 返回值         : 应答中的运行状态。
  * 日期            : 2026.11.16
  ******************************************************************************/
-static u16 control_wire(u8 action, u8 target) //20261116-8 add
+static u16 control_wire(u8 action, u8 target) //20261117-7 change
 {
     u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0x11, 0x11, 2, action, target, 0, 0};
     u8 reply[20];
 
     fill_crc(request, sizeof(request));
     send_request(request, sizeof(request));
+    CHECK(!uart4_sending());
+    scan_control();
     collect_reply(reply, sizeof(reply), 0);
     CHECK(reply[5] == 0x91 && reply[6] == 0x11 && reply[7] == 0x11);
     CHECK(reply[8] == 9 && reply[9] == 0 && reply[10] == action && reply[11] == target);
@@ -1209,8 +1226,11 @@ static u16 control_wire(u8 action, u8 target) //20261116-8 add
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-static void check_manual_start(void) //20261116-8 add
+static void check_manual_start(void) //20261117-7 change
 {
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0x12, 0x34, 2, 1, 1, 0, 0};
+    u8 reply[20];
+
     config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
     config.Lock1 = 0;
     sys.Pump_A_ON = 0;
@@ -1219,10 +1239,87 @@ static void check_manual_start(void) //20261116-8 add
     sys.Pump_Add_Flag = 0;
     sys.Fault_Error = 0;
 
-    CHECK((control_wire(1, 1) & 1) == 1);
+    sys.Pump_A_state = 0;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    CHECK(!uart4_sending());
+    scan_control();
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x91 && reply[6] == 0x12 && reply[7] == 0x34);
+    CHECK(reply[9] == 0 && (reply[13] & 0x10) != 0 && crc(reply, sizeof(reply)) == 0);
     CHECK(sys.Pump_A_ON == 1);
-    CHECK((control_wire(2, 1) & 1) == 1);
+    CHECK((control_wire(2, 1) & 0x1f) == 1);
     CHECK(sys.Pump_A_ON == 0 && config.Hand_Auto_timer_Flag == RUNMODE_MANUAL);
+    CHECK((control_wire(2, 1) & 0x1f) == 1); // 已达到目标仍正常确认一次。
+    if (TEST_PUMPS == 2) {
+        CHECK((control_wire(1, 2) & 0x30) == 0x20);
+        CHECK((control_wire(2, 2) & 0x30) == 0);
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : check_control_deadline
+ * 功能描述       : 验证防锈输出阻止停泵确认时的失败帧、收帧边界和保护扫描。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.17
+ ******************************************************************************/
+static void check_control_deadline(void) //20261117-7 add
+{
+    u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0x12, 0x35, 2, 2, 1, 0, 0};
+    u8 reply[21];
+    u8 i;
+    u8 saved_flag = sys.save_flag;
+    u8 writes = flash_writes;
+
+    sys.save_flag = 0;
+    for (i = 0; i < 200; i++) {
+        save_pro();                  // 排除上次擦写冷却时间对本次断言的影响。
+    }
+    sys.FangXiuAFlag = 1;
+    scan_control();
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    CHECK(!uart4_sending());
+    sys.save_flag = 1;
+    save_pro();
+    CHECK(sys.save_flag == 1 && flash_writes == writes);
+    sys.save_flag = saved_flag;
+
+    for (i = 0; i < sizeof(info_request); i++) {
+        receive_byte(info_request[i]); // 等待期间的新请求不能替换原关联号。
+    }
+    for (i = 1; i < 30; i++) {
+        timer_expire();
+        if (i % 10 == 0) {
+            scan_control();
+        }
+        uart4_service();
+        CHECK(!uart4_sending());
+    }
+    timer_expire();
+    uart4_service();
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[0] == 1 && reply[5] == 0x91 && reply[6] == 0x12 && reply[7] == 0x35);
+    CHECK(reply[8] == 10 && reply[9] == 0x0a && reply[10] == 2);
+    CHECK(memcmp(reply + 11, "\0\0\0\0\0\0\0\0", 8) == 0 && crc(reply, sizeof(reply)) == 0);
+    timer_expire();                 // 额外数据须经过新的完整静默再接收。
+    uart4_service();
+    CHECK(!uart4_sending());
+    sys.FangXiuAFlag = 0;
+    CHECK((control_wire(2, 1) & 0x30) == 0);
+
+    request[9] = 4;
+    request[10] = 0;
+    fill_crc(request, sizeof(request));
+    send_request(request, sizeof(request));
+    CHECK(!uart4_sending());
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL; // 模拟本地入口抢先切换模式。
+    scan_control();
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x91 && reply[6] == 0x12 && reply[7] == 0x35);
+    CHECK(reply[9] == 0x0a && reply[10] == 4 && crc(reply, sizeof(reply)) == 0);
+    check_info(0);
 }
 
 /******************************************************************************
@@ -1232,7 +1329,7 @@ static void check_manual_start(void) //20261116-8 add
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-static void check_control_limits(void) //20261116-8 add
+static void check_control_limits(void) //20261117-7 change
 {
     u8 request[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0x11, 0x11, 2, 1, 1, 0, 0};
 
@@ -1266,18 +1363,23 @@ static void check_control_limits(void) //20261116-8 add
         request[10] = 2;
         check_error(request, sizeof(request), 6, 1);
     }
-    control_wire(1, 3);
+    CHECK((control_wire(1, 3) & 0x30) == (TEST_PUMPS == 2 ? 0x30 : 0x10));
     CHECK(sys.Pump_A_ON == 1 && sys.Pump_B_ON == (TEST_PUMPS == 2));
-    control_wire(2, 3);
+    CHECK((control_wire(2, 3) & 0x30) == 0);
 
+    config.Auto_Mode = sys.Auto_Mode = SENSORTYPE_POLE;
+    config.Sensor_Mode = CTROLTYPE_DRAIN;
+    config.Pump_AB_Mode = 0;
+    sys.shang_DIR = sys.xia_DIR = sys.sensor_err = 0;
+    config.AUTO_Timing_Run = config.AUTO_Timing_Stop = 2;
     sys.Auto_timer_count = 500;
-    CHECK((control_wire(5, 0) & 0x0f) == 10);
+    CHECK((control_wire(5, 0) & 0x3f) == 0x1a);
     CHECK(sys.autoTimerFlag == 1 && sys.Auto_timer_count == 0 && sys.save_flag == 1);
     sys.save_flag = 0;
     sys.Auto_timer_count = 50;
     control_wire(5, 0);
     CHECK(sys.Auto_timer_count == 50 && sys.save_flag == 0);
-    CHECK((control_wire(4, 0) & 0x0f) == 6);
+    CHECK((control_wire(4, 0) & 0x3f) == 6);
     CHECK(sys.save_flag == 1);
     control_wire(3, 0);
 
@@ -1292,6 +1394,9 @@ static void check_control_limits(void) //20261116-8 add
     config_loaded = 0;
     check_error(request, sizeof(request), 0x0e, 1);
     config_loaded = 1;
+    Boot_Flag = 0;
+    check_error(request, sizeof(request), 0x0e, 1);
+    Boot_Flag = 1;
 }
 
 /******************************************************************************
@@ -1670,6 +1775,9 @@ static void check_vector(const char *input, const char *output, u8 length) //202
     request_length = decode_vector(input, request);
     CHECK(request_length == 11 + request[8] && crc(request, request_length) == 0);
     send_request(request, request_length);
+    if (request[5] == 0x11 && !uart4_sending()) {
+        scan_control();
+    }
     collect_reply(reply, length, 0);
     CHECK(length == 11 + reply[8] && crc(reply, length) == 0);
     CHECK(reply[5] == (request[5] | 0x80));
@@ -1702,7 +1810,7 @@ static void check_final_vectors(void) //20261116-12 add
 
     if (TEST_PUMPS == 2 && TEST_PHASES == 1) {
         check_vector("0143BF0603010001004984",
-                     "0143BF0603810001100000A39300C9010200DC001F611009080D75", 27);
+                     "0143BF0603810001100001A39300C9010200DC001F61100908CC75", 27);
     }
     check_vector("0143BF06030200020203015774", "0143BF0603820002060003010000646BA2", 17);
     check_vector("0143BF0603100003030303843AC0", "0143BF060390000304000303849E64", 15);
@@ -1991,6 +2099,7 @@ int main(void) //20261116-0 add
     check_sensor_parameter_changes();
     check_address_change();
     check_manual_start();
+    check_control_deadline();
     check_control_limits();
     check_control_contact();
     check_display_digits();

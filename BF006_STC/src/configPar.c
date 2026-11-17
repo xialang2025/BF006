@@ -233,7 +233,7 @@ void Total_Power_Time_Clear(void) //20260501-1 add
 void save_pro(void) //20260729-13 change
 {
     static u8 tick = 0;
-    if (sys.save_flag == 1 && tick == 0 && !uart4_sending()) //20261116-4 change 最后停止位结束后才擦写。
+    if (sys.save_flag == 1 && tick == 0 && !uart4_blocks_save()) //20261117-7 change 控制等待和最后停止位期间延后擦写。
     {
         EEPROM_SectorErase(BIAS_ADDR);
 

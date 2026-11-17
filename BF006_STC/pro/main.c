@@ -75,6 +75,7 @@ void main(void)
                 Sys_Control();
                 Timer100ms_pro();
                 KEY_Control();
+                uart4_control_scanned(); //20261117-7 add 保护、输出及本地按键处理后确认控制应答。
                 DIS_Control();
             }
 

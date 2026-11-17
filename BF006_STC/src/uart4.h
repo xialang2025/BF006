@@ -7,8 +7,12 @@
 
 void uart_init(void);
 void uart4_service(void);
+void uart4_control_scanned(void); //20261117-7 add
 bit uart4_sending(void);
+bit uart4_blocks_save(void); //20261117-7 add
+#define BF4G_REPLY_PENDING 0xff //20261117-7 add 受理后保留请求，等待控制扫描。
 u8 bf4g_reply(u8 xdata *frame, u8 length);
+u8 bf4g_control_result(u8 xdata *frame, bit timed_out); //20261117-7 add
 
 #if 0 //20261113-0 del 封存旧协议的串口缓冲区、计数和收发接口声明。
 #define	COM_TX4_Lenth	512
