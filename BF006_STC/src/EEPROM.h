@@ -15,7 +15,9 @@
 
 #include	"config.h"
 
-#define BF4G_BENCH_BOOT_INIT 0 //20261124-6 add 仅在台架烧录版本启用空白编号区初始化。
+#ifndef BF4G_BENCH_BOOT_INIT //20261124-7 change 允许编译目标指定空白编号区初始化。
+#define BF4G_BENCH_BOOT_INIT 0
+#endif
 #if BF4G_BENCH_BOOT_INIT
 bit EEPROM_is_erased(u16 address, u16 length);
 #endif
