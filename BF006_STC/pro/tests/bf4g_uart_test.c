@@ -2017,6 +2017,134 @@ static void check_sensor_switch_hysteresis(void) //20261116-14 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_fault_baseline
+ * 功能描述       : 模拟两组保护检查后捕获完整的健康首帧。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_baseline(void) //20261124-0 add
+{
+    static const u8 expected[] = {
+        0x01, 0x43, 0xbf, 0x06, 0x03, 0x20, 0x00, 0x01, 0x0d,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x3b
+    };
+    u8 frame[sizeof(expected)];
+
+    uart_init();
+    config.Dev_Address = 1;
+    config_loaded = 1;
+    sys.Fault_Error = 0;
+    Boot_Flag = 0;
+    uart4_fault_start(1);
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+
+    Boot_Flag = 1;
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+    uart4_fault_scanned(0);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+    CHECK(memcmp(frame, expected, sizeof(frame)) == 0);
+
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+}
+
+/******************************************************************************
+ * 函数名称       : check_fault_ack
+ * 功能描述       : 验证只有匹配的串口确认能释放已发送的首帧。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_ack(void) //20261124-0 add
+{
+    static const u8 wrong_offsets[] = {0, 1, 4, 5, 7, 8, 9, 13, 17};
+    u8 ack[20] = {
+        1, 0x43, 0xbf, 0x06, 3, 0xa0, 0, 1, 9, 0, 0, 0, 0, 1, 0, 0, 0, 1
+    };
+    u8 bad[sizeof(ack)];
+    u8 i;
+
+    CHECK(uart4_fault_awaiting_ack());
+    fill_crc(ack, sizeof(ack));
+    for (i = 0; i < sizeof(wrong_offsets); i++) {
+        memcpy(bad, ack, sizeof(bad));
+        bad[wrong_offsets[i]] ^= 2;
+        fill_crc(bad, sizeof(bad));
+        send_request(bad, sizeof(bad));
+        CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
+    }
+
+    memcpy(bad, ack, sizeof(bad));
+    bad[19] ^= 1;
+    send_request(bad, sizeof(bad));
+    CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
+
+    memcpy(bad, ack, sizeof(bad));
+    fill_crc(bad, sizeof(bad) - 1);
+    send_request(bad, sizeof(bad) - 1);
+    CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
+
+    memcpy(bad, ack, sizeof(bad));
+    bad[5] = 0x20;                        // 用控制器发出的命令方向尝试确认。
+    check_error(bad, sizeof(bad), 1, 0xff);
+    CHECK(uart4_fault_awaiting_ack());
+
+    send_request(ack, sizeof(ack));
+    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
+    send_request(ack, sizeof(ack));
+    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
+    check_info(0);
+}
+
+/******************************************************************************
+ * 函数名称       : check_fault_baseline_with_faults
+ * 功能描述       : 启动编号不可用或位图不合法时等待，首次有效时携带实际故障。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_baseline_with_faults(void) //20261124-0 add
+{
+    u8 frame[24];
+
+    uart_init();
+    Boot_Flag = 1;
+    sys.Fault_Error = 5;
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+
+    uart4_fault_start(0x12345678UL);
+    sys.Fault_Error = 0x80000000UL;       // 保留位无效，不能用零位图替代。
+    uart4_fault_scanned(0);
+    uart4_service();
+    CHECK(!uart4_sending());
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+
+    sys.Fault_Error = 5;
+    uart4_fault_scanned(1);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+    CHECK(frame[5] == 0x20 && frame[7] == 1 && frame[8] == 13);
+    CHECK(frame[9] == 0x12 && frame[10] == 0x34 && frame[11] == 0x56 && frame[12] == 0x78);
+    CHECK(frame[16] == 1 && frame[17] == 0);
+    CHECK(frame[18] == 0 && frame[19] == 0 && frame[20] == 0 && frame[21] == 5);
+    CHECK(crc(frame, sizeof(frame)) == 0);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -2112,6 +2240,9 @@ int main(void) //20261116-0 add
     check_rf_during_summary();
     check_sensor_switch_hysteresis();
     check_sensor_startup();
+    check_fault_baseline(); //20261124-0 add 核对启动基线的串口报文。
+    check_fault_ack(); //20261124-0 add 校验主动报文确认边界。
+    check_fault_baseline_with_faults(); //20261124-0 add 核对带故障启机和无效位图。
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

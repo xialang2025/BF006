@@ -7,6 +7,12 @@
 
 void uart_init(void);
 void uart4_service(void);
+void uart4_fault_start(u32 boot); //20261124-0 add 由已可靠取得编号的启动路径启用上报。
+void uart4_fault_scanned(bit one_second); //20261124-0 add 在相应保护组结束后通知。
+bit uart4_fault_awaiting_ack(void); //20261124-0 add 查询原帧的等待确认状态。
+#define BF4G_FAULT_FRAME_LENGTH 24 //20261124-0 add 主动故障帧完整长度。
+bit bf4g_fault_baseline(u8 xdata *frame, u32 boot); //20261124-0 add 编码有效的启动基线。
+bit bf4g_fault_ack_matches(const u8 xdata *frame, u8 length, const u8 xdata *event); //20261124-0 add 校验主动确认。
 void uart4_control_scanned(void); //20261117-7 add
 bit uart4_sending(void);
 bit uart4_blocks_save(void); //20261117-7 add

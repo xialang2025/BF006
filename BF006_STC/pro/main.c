@@ -76,6 +76,7 @@ void main(void)
                 Timer100ms_pro();
                 KEY_Control();
                 uart4_control_scanned(); //20261117-7 add 保护、输出及本地按键处理后确认控制应答。
+                uart4_fault_scanned(0); //20261124-0 add 记录启动就绪后的百毫秒保护扫描。
                 DIS_Control();
             }
 
@@ -94,6 +95,7 @@ void main(void)
             Power_Up_Dis();
             Fault_Control();
             Customer_Test_Limit_Handle(); //20260501-0 add customer test time-limit fault check
+            uart4_fault_scanned(1); //20261124-0 add 一秒组保护判断结束后采集活动故障。
 
             if(sys.Record_Dis_Flag==1)
             {

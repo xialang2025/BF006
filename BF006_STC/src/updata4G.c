@@ -1658,6 +1658,72 @@ static void bf4g_put_u32(u8 xdata *out, u32 value) //20261116-2 add
 }
 
 /******************************************************************************
+ * 函数名称       : bf4g_fault_baseline
+ * 功能描述       : 将有效的活动故障位图编成启动基线。
+ * 输入参数       : frame，上报缓冲；boot，已经可靠保存的启动编号。
+ * 返回值         : 位图有效时为一。
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+bit bf4g_fault_baseline(u8 xdata *frame, u32 boot) //20261124-0 add
+{
+    bf4g_diagnostics_t xdata snapshot;
+    u32 faults;
+    u8 quality;
+    u16 crc;
+
+    bf4g_capture_diagnostics(&snapshot);
+    faults = bf4g_run_read(0x0a, &quality, &snapshot);
+    if (quality != 0) {
+        return 0;                         // 保留下一次取得有效故障位图的机会。
+    }
+
+    frame[0] = config.Dev_Address;
+    frame[1] = 0x43;
+    frame[2] = 0xbf;
+    frame[3] = 0x06;
+    frame[4] = BF4G_FMT;
+    frame[5] = 0x20;
+    bf4g_put_u16(frame + 6, 1);           // 启动首帧的关联号和序号均为一。
+    frame[8] = 13;
+    bf4g_put_u32(frame + BF4G_DATA, boot);
+    bf4g_put_u32(frame + BF4G_DATA + 4, 1);
+    frame[17] = 0;                        // 首帧报告当前全量状态。
+    bf4g_put_u32(frame + 18, faults);
+    crc = bf4g_crc(frame, BF4G_FAULT_FRAME_LENGTH - 2);
+    frame[22] = crc;
+    frame[23] = crc >> 8;
+    return 1;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_fault_ack_matches
+ * 功能描述       : 完整核对接收确认是否对应唯一待确认的主动帧。
+ * 输入参数       : frame，收到的报文；length，实收长度；event，待确认原帧。
+ * 返回值         : 全部字段匹配时为一。
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+bit bf4g_fault_ack_matches(const u8 xdata *frame, u8 length, const u8 xdata *event) //20261124-0 add
+{
+    u8 i;
+
+    if (length != 20 || frame[5] != 0xa0 || frame[8] != 9 || frame[9] != 0 ||
+        frame[6] != event[6] || frame[7] != event[7]) {
+        return 0;
+    }
+    for (i = 0; i < 5; i++) {
+        if (frame[i] != event[i]) {
+            return 0;                   // 同时校验地址、公共头和格式。
+        }
+    }
+    for (i = 0; i < 8; i++) {
+        if (frame[10 + i] != event[BF4G_DATA + i]) {
+            return 0;                   // 回显的启动编号和序号必须完全相同。
+        }
+    }
+    return bf4g_crc(frame, length) == 0;
+}
+
+/******************************************************************************
  * 函数名称       : bf4g_read_runtime
  * 功能描述       : 校验运行字段区间并写入每项质量和三十二位值。
  * 输入参数       : out，请求及应答数据位置；length，请求数据长度。
