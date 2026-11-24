@@ -12,6 +12,9 @@ u16 Limit_Current;
 const u16 Value_OVP = 480;
 static u8 flash[117];
 static u8 flash_writes;
+static u8 boot_flash[2][12]; //20261124-1 add 模拟两个独立的启动编号扇区。
+static u8 boot_writes;
+static u8 boot_write_limit = 12; //20261124-1 add 模拟断电时只写完记录的一部分。
 static u32 control_faults;
 static u8 simulate_rf;
 union NUM_REG NUM5, NUM6, NUM7, NUM8;
@@ -62,6 +65,11 @@ void Speak_Con(u8 value) //20261116-2 add
  ******************************************************************************/
 void EEPROM_read_n(u16 address, u8 *out, u16 length) //20261116-4 add
 {
+    if (address == 0x0200 || address == 0x0400) { //20261124-1 add 编号读入与参数区独立。
+        CHECK(length == sizeof(boot_flash[0]));
+        memcpy(out, boot_flash[address == 0x0400], length);
+        return;
+    }
     CHECK(address == 0 && length == sizeof(flash));
     memcpy(out, flash, length);
 }
@@ -75,6 +83,10 @@ void EEPROM_read_n(u16 address, u8 *out, u16 length) //20261116-4 add
  ******************************************************************************/
 void EEPROM_SectorErase(u16 address) //20261116-4 add
 {
+    if (address == 0x0200 || address == 0x0400) { //20261124-1 add 模拟单个编号扇区被擦除。
+        memset(boot_flash[address == 0x0400], 0xff, sizeof(boot_flash[0]));
+        return;
+    }
     CHECK(address == 0);
     memset(flash, 0xff, sizeof(flash));
 }
@@ -88,6 +100,18 @@ void EEPROM_SectorErase(u16 address) //20261116-4 add
  ******************************************************************************/
 void EEPROM_write_n(u16 address, u8 *source, u16 length) //20261116-4 add
 {
+    if (address == 0x0200 || address == 0x0400) { //20261124-1 add 写入前须已经擦除编号扇区。
+        u8 *slot = boot_flash[address == 0x0400];
+        u8 i;
+
+        CHECK(length == sizeof(boot_flash[0]));
+        for (i = 0; i < length; i++) {
+            CHECK(slot[i] == 0xff);
+        }
+        memcpy(slot, source, boot_write_limit);
+        boot_writes++;
+        return;
+    }
     CHECK(address == 0 && length == sizeof(flash));
     CHECK(flash[0] == 0xff && flash[sizeof(flash) - 1] == 0xff);
     memcpy(flash, source, length);
@@ -2145,6 +2169,52 @@ static void check_fault_baseline_with_faults(void) //20261124-0 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_fault_boot_store
+ * 功能描述       : 核对两份首次初始化数据的续号和独立擦写。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_boot_store(void) //20261124-1 add
+{
+    static const u8 seed[12] = {0x42, 0x46, 0x30, 0x36, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff};
+    u8 current[sizeof(flash)];
+
+    memcpy(current, flash, sizeof(flash));
+    memset(boot_flash, 0xff, sizeof(boot_flash));
+    CHECK(Par_AdvanceFaultBoot() == 0);
+    CHECK(boot_writes == 0);
+
+    memcpy(boot_flash[0], seed, sizeof(seed));
+    memcpy(boot_flash[1], seed, sizeof(seed));
+    CHECK(Par_AdvanceFaultBoot() == 1);
+    CHECK(Par_AdvanceFaultBoot() == 2);
+    CHECK(boot_writes == 2);
+    uart_init();
+    uart4_fault_start(2);
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(boot_writes == 2);
+
+    boot_write_limit = 8;
+    CHECK(Par_AdvanceFaultBoot() == 0);
+    CHECK(boot_writes == 3);
+    boot_write_limit = 12;
+    uart_init();
+    uart4_fault_start(Par_AdvanceFaultBoot());
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending() && boot_writes == 3);
+    check_info(0);
+
+    memset(boot_flash, 0xff, sizeof(boot_flash));
+    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 3);
+    CHECK(memcmp(current, flash, sizeof(flash)) == 0);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -2243,6 +2313,7 @@ int main(void) //20261116-0 add
     check_fault_baseline(); //20261124-0 add 核对启动基线的串口报文。
     check_fault_ack(); //20261124-0 add 校验主动报文确认边界。
     check_fault_baseline_with_faults(); //20261124-0 add 核对带故障启机和无效位图。
+    check_fault_boot_store(); //20261124-1 add 检查首次初始化和安全续号。
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

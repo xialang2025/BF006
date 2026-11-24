@@ -29,6 +29,7 @@ void main(void)
     sys_init();
     Par_Init();
     uart_init(); //20261113-0 change 在开放全局中断前完成串口四配置
+    uart4_fault_start(Par_AdvanceFaultBoot()); //20261124-1 add 编号保存失败时只关闭主动上报。
     EA = 1; // 允许CPU 全局中断
     RS485_EN  = 0;
 #if 0 //20261113-0 del 封存旧协议的上电上报标志。
