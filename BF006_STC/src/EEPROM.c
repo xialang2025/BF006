@@ -38,6 +38,34 @@ void EEPROM_Trig(void)
 	EA = F0;    //恢复全局中断
 }
 
+#if BF4G_BENCH_BOOT_INIT
+/******************************************************************************
+ * 函数名称       : EEPROM_is_erased
+ * 功能描述       : 逐字节确认指定数据区可以读取且完全擦空。
+ * 输入参数       : address，起始地址；length，检查字节数。
+ * 返回值         : 可读取且每个字节均为擦除值时为一。
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+bit EEPROM_is_erased(u16 address, u16 length) //20261124-6 add
+{
+    IAP_ENABLE();
+    IAP_READ();
+    while (length != 0) {
+        IAP_ADDRH = address >> 8;
+        IAP_ADDRL = (u8)address;
+        IAP_DATA = 0;                   // 未得到有效数据时不能当作空白。
+        EEPROM_Trig();
+        if ((IAP_CONTR & IAP_CMD_FAIL) || IAP_DATA != 0xff) {
+            break;
+        }
+        address++;
+        length--;
+    }
+    DisableEEPROM();
+    return length == 0;
+}
+#endif
+
 //========================================================================
 // 函数: void EEPROM_read_n(u16 EE_address,u8 *DataAddress,u16 number)
 // 描述: 从指定EEPROM首地址读出n个字节放指定的缓冲.

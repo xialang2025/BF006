@@ -46,12 +46,12 @@ static bit Par_ReadFaultBoot(u16 address, u32 *value) //20261124-1 add
 
 /******************************************************************************
  * 函数名称       : Par_WriteFaultBoot
- * 功能描述       : 只擦写指定的编号扇区，保留另一份有效记录。
+ * 功能描述       : 将完整编号记录写入已擦除的扇区。
  * 输入参数       : address，编号扇区首地址；value，新编号。
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-static void Par_WriteFaultBoot(u16 address, u32 value) //20261124-1 add
+static void Par_WriteFaultBoot(u16 address, u32 value) //20261124-6 change
 {
     u8 xdata record[12];
     u8 i;
@@ -65,9 +65,35 @@ static void Par_WriteFaultBoot(u16 address, u32 value) //20261124-1 add
         record[11 - i] = (u8)~value;
         value >>= 8;
     }
-    EEPROM_SectorErase(address);
     EEPROM_write_n(address, record, sizeof(record));
 }
+
+#if BF4G_BENCH_BOOT_INIT
+/******************************************************************************
+ * 函数名称       : Par_InitBenchFaultBoot
+ * 功能描述       : 仅在两个编号扇区完全擦空时写入台架首次编号。
+ * 输入参数       : None
+ * 返回值         : 两份记录可靠读回时返回一，否则返回零。
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static u32 Par_InitBenchFaultBoot(void) //20261124-6 add
+{
+    u32 stored;
+
+    if (!EEPROM_is_erased(BF4G_BOOT_LEFT, 512) || !EEPROM_is_erased(BF4G_BOOT_RIGHT, 512)) {
+        return 0;                       // 任何读失败或已有数据都退出初始化。
+    }
+    Par_WriteFaultBoot(BF4G_BOOT_LEFT, 0);
+    if (!Par_ReadFaultBoot(BF4G_BOOT_LEFT, &stored) || stored != 0) {
+        return 0;
+    }
+    Par_WriteFaultBoot(BF4G_BOOT_RIGHT, 1);
+    if (!Par_ReadFaultBoot(BF4G_BOOT_RIGHT, &stored) || stored != 1) {
+        return 0;
+    }
+    return 1;
+}
+#endif
 
 /******************************************************************************
  * 函数名称       : Par_AdvanceFaultBoot
@@ -76,7 +102,7 @@ static void Par_WriteFaultBoot(u16 address, u32 value) //20261124-1 add
  * 返回值         : 可靠读回新编号时返回该编号，否则返回零。
  * 日期            : 2026.11.24
  ******************************************************************************/
-u32 Par_AdvanceFaultBoot(void) //20261124-1 add
+u32 Par_AdvanceFaultBoot(void) //20261124-6 change
 {
     u32 left;
     u32 right;
@@ -86,7 +112,11 @@ u32 Par_AdvanceFaultBoot(void) //20261124-1 add
     u16 target;
 
     if (!Par_ReadFaultBoot(BF4G_BOOT_LEFT, &left) || !Par_ReadFaultBoot(BF4G_BOOT_RIGHT, &right)) {
+#if BF4G_BENCH_BOOT_INIT
+        return Par_InitBenchFaultBoot();
+#else
         return 0;                      // 任一份失去可信内容时可能已丢失较新编号。
+#endif
     }
     if (left >= right) {
         latest = left;
@@ -102,6 +132,7 @@ u32 Par_AdvanceFaultBoot(void) //20261124-1 add
     }
 
     latest++;
+    EEPROM_SectorErase(target);         // 更新较旧记录时保留另一扇区。
     Par_WriteFaultBoot(target, latest);
     if (!Par_ReadFaultBoot(target, &stored) || stored != latest) {
         return 0;                      // 只有写后核对成功才允许首次发送。

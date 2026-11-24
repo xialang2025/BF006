@@ -3,6 +3,7 @@
 #include <string.h>
 #include "uart4.h"
 #include "configPar.h"
+#include "eeprom.h" //20261124-6 add 使用实际设备的台架初始化开关。
 #include "ad.h"
 #include "Display.h"
 #include "HT1622.h"
@@ -12,7 +13,10 @@ u16 Limit_Current;
 const u16 Value_OVP = 480;
 static u8 flash[117];
 static u8 flash_writes;
-static u8 boot_flash[2][12]; //20261124-1 add 模拟两个独立的启动编号扇区。
+static u8 boot_flash[2][512]; //20261124-6 change 模拟编号扇区全长和末端已有数据。
+#if BF4G_BENCH_BOOT_INIT
+static bit boot_probe_available = 1;
+#endif
 static u8 boot_writes;
 static u8 boot_write_limit = 12; //20261124-1 add 模拟断电时只写完记录的一部分。
 static u32 control_faults;
@@ -66,7 +70,7 @@ void Speak_Con(u8 value) //20261116-2 add
 void EEPROM_read_n(u16 address, u8 *out, u16 length) //20261116-4 add
 {
     if (address == 0x0200 || address == 0x0400) { //20261124-1 add 编号读入与参数区独立。
-        CHECK(length == sizeof(boot_flash[0]));
+        CHECK(length == 12);
         memcpy(out, boot_flash[address == 0x0400], length);
         return;
     }
@@ -104,7 +108,7 @@ void EEPROM_write_n(u16 address, u8 *source, u16 length) //20261116-4 add
         u8 *slot = boot_flash[address == 0x0400];
         u8 i;
 
-        CHECK(length == sizeof(boot_flash[0]));
+        CHECK(length == 12);
         for (i = 0; i < length; i++) {
             CHECK(slot[i] == 0xff);
         }
@@ -117,6 +121,33 @@ void EEPROM_write_n(u16 address, u8 *source, u16 length) //20261116-4 add
     memcpy(flash, source, length);
     flash_writes++;
 }
+
+#if BF4G_BENCH_BOOT_INIT
+/******************************************************************************
+ * 函数名称       : EEPROM_is_erased
+ * 功能描述       : 模拟读取编号扇区和数据区不可用。
+ * 输入参数       : address，扇区地址；length，检查长度。
+ * 返回值         : 区间可读且为擦除值时为一。
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+bit EEPROM_is_erased(u16 address, u16 length) //20261124-6 add
+{
+    const u8 *slot;
+    u16 i;
+
+    CHECK((address == 0x0200 || address == 0x0400) && length == 512);
+    if (!boot_probe_available) {
+        return 0;
+    }
+    slot = boot_flash[address == 0x0400];
+    for (i = 0; i < length; i++) {
+        if (slot[i] != 0xff) {
+            return 0;
+        }
+    }
+    return 1;
+}
+#endif
 
 /******************************************************************************
  * 函数名称       : Speak_Stop
@@ -2195,6 +2226,57 @@ static void check_fault_baseline_with_faults(void) //20261124-0 add
     CHECK(crc(frame, sizeof(frame)) == 0);
 }
 
+#if BF4G_BENCH_BOOT_INIT
+/******************************************************************************
+ * 函数名称       : check_bench_boot_init
+ * 功能描述       : 从擦空的独立板启动，并验证首次上报前的存储判断。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_bench_boot_init(void) //20261124-6 add
+{
+    u8 frame[24];
+    u8 parameters[sizeof(flash)];
+    u32 boot;
+
+    memcpy(parameters, flash, sizeof(flash));
+    boot_writes = 0;
+    memset(boot_flash, 0xff, sizeof(boot_flash));
+    boot_probe_available = 0;
+    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 0);
+    boot_probe_available = 1;
+
+    boot_flash[1][511] = 0;
+    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 0);
+    boot_flash[1][511] = 0xff;
+
+    boot_write_limit = 3;
+    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 1);
+    boot_write_limit = 12;
+    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 1);
+
+    memset(boot_flash, 0xff, sizeof(boot_flash));
+    boot_writes = 0;
+    boot = Par_AdvanceFaultBoot();
+    CHECK(boot == 1 && boot_writes == 2);
+    uart_init();
+    uart4_fault_cold_start();
+    uart4_fault_start(boot);
+    Boot_Flag = 1;
+    config.Dev_Address = 1;
+    sys.Fault_Error = 0;
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    collect_fault(frame);
+    CHECK(frame[5] == 0x20 && frame[12] == 1 && frame[16] == 1 && frame[17] == 0);
+    CHECK(crc(frame, sizeof(frame)) == 0);
+    CHECK(Par_AdvanceFaultBoot() == 2 && boot_writes == 3);
+    CHECK(memcmp(parameters, flash, sizeof(flash)) == 0);
+}
+#endif
+
 /******************************************************************************
  * 函数名称       : check_fault_boot_store
  * 功能描述       : 核对两份首次初始化数据的续号和独立擦写。
@@ -2208,9 +2290,12 @@ static void check_fault_boot_store(void) //20261124-1 add
     u8 current[sizeof(flash)];
 
     memcpy(current, flash, sizeof(flash));
+    boot_writes = 0;
     memset(boot_flash, 0xff, sizeof(boot_flash));
+#if !BF4G_BENCH_BOOT_INIT
     CHECK(Par_AdvanceFaultBoot() == 0);
     CHECK(boot_writes == 0);
+#endif
 
     memcpy(boot_flash[0], seed, sizeof(seed));
     memcpy(boot_flash[1], seed, sizeof(seed));
@@ -2236,8 +2321,10 @@ static void check_fault_boot_store(void) //20261124-1 add
     CHECK(!uart4_sending() && boot_writes == 3);
     check_info(0);
 
+#if !BF4G_BENCH_BOOT_INIT
     memset(boot_flash, 0xff, sizeof(boot_flash));
     CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 3);
+#endif
     CHECK(memcmp(current, flash, sizeof(flash)) == 0);
 }
 
@@ -2685,6 +2772,9 @@ int main(void) //20261116-0 add
     check_fault_baseline(); //20261124-0 add 核对启动基线的串口报文。
     check_fault_ack(); //20261124-0 add 校验主动报文确认边界。
     check_fault_baseline_with_faults(); //20261124-0 add 核对带故障启机和无效位图。
+#if BF4G_BENCH_BOOT_INIT
+    check_bench_boot_init(); //20261124-6 add 先验证只烧程序的清空板。
+#endif
     check_fault_boot_store(); //20261124-1 add 检查首次初始化和安全续号。
     boot_writes_before_reporting = boot_writes;
     check_fault_retries(0); //20261124-2 add 核对重发、停报和再次上电。

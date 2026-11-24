@@ -15,6 +15,11 @@
 
 #include	"config.h"
 
+#define BF4G_BENCH_BOOT_INIT 0 //20261124-6 add 仅在台架烧录版本启用空白编号区初始化。
+#if BF4G_BENCH_BOOT_INIT
+bit EEPROM_is_erased(u16 address, u16 length);
+#endif
+
 #define		STC8X1K08	8
 #define		STC8X1K16	16
 #define		STC8XxK32	32
