@@ -1658,24 +1658,32 @@ static void bf4g_put_u32(u8 xdata *out, u32 value) //20261116-2 add
 }
 
 /******************************************************************************
- * 函数名称       : bf4g_fault_baseline
- * 功能描述       : 将有效的活动故障位图编成启动基线。
- * 输入参数       : frame，上报缓冲；boot，已经可靠保存的启动编号。
- * 返回值         : 位图有效时为一。
+ * 函数名称       : bf4g_fault_sample
+ * 功能描述       : 读取与普通查询相同的活动故障位图及质量。
+ * 输入参数       : faults，位图输出位置。
+ * 返回值         : 样本有效时为一。
  * 日期            : 2026.11.24
  ******************************************************************************/
-bit bf4g_fault_baseline(u8 xdata *frame, u32 boot) //20261124-0 add
+bit bf4g_fault_sample(u32 *faults) //20261124-3 add
 {
     bf4g_diagnostics_t xdata snapshot;
-    u32 faults;
     u8 quality;
-    u16 crc;
 
     bf4g_capture_diagnostics(&snapshot);
-    faults = bf4g_run_read(0x0a, &quality, &snapshot);
-    if (quality != 0) {
-        return 0;                         // 保留下一次取得有效故障位图的机会。
-    }
+    *faults = bf4g_run_read(0x0a, &quality, &snapshot);
+    return quality == 0;
+}
+
+/******************************************************************************
+ * 函数名称       : bf4g_fault_encode
+ * 功能描述       : 封装全量活动故障事件，保留创建时的地址。
+ * 输入参数       : frame，上报缓冲；boot，启动编号；seq，报文序号；kind，类别；faults，有效位图。
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+void bf4g_fault_encode(u8 xdata *frame, u32 boot, u32 seq, u8 kind, u32 faults) //20261124-3 add
+{
+    u16 crc;
 
     frame[0] = config.Dev_Address;
     frame[1] = 0x43;
@@ -1683,16 +1691,15 @@ bit bf4g_fault_baseline(u8 xdata *frame, u32 boot) //20261124-0 add
     frame[3] = 0x06;
     frame[4] = BF4G_FMT;
     frame[5] = 0x20;
-    bf4g_put_u16(frame + 6, 1);           // 启动首帧的关联号和序号均为一。
+    bf4g_put_u16(frame + 6, (u16)(1 + (seq - 1) % 65535UL)); // 序号跨过关联号上限后重新从一开始。
     frame[8] = 13;
     bf4g_put_u32(frame + BF4G_DATA, boot);
-    bf4g_put_u32(frame + BF4G_DATA + 4, 1);
-    frame[17] = 0;                        // 首帧报告当前全量状态。
+    bf4g_put_u32(frame + BF4G_DATA + 4, seq);
+    frame[17] = kind;
     bf4g_put_u32(frame + 18, faults);
     crc = bf4g_crc(frame, BF4G_FAULT_FRAME_LENGTH - 2);
     frame[22] = crc;
     frame[23] = crc >> 8;
-    return 1;
 }
 
 /******************************************************************************

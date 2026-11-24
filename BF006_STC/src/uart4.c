@@ -42,11 +42,18 @@ enum { //20261124-0 add 启动基线在采样、待发和等待确认之间移交。
     S4_FAULT_DISABLED,
     S4_FAULT_BASELINE,
     S4_FAULT_READY,
+    S4_FAULT_IDLE, //20261124-3 add 已有基线，等待新的有效状态。
     S4_FAULT_WAIT
 };
 
 static u8 xdata s4_fault_frame[BF4G_FAULT_FRAME_LENGTH];
 static u32 xdata s4_fault_boot;
+#define S4_FAULT_CHANGED 1 //20261124-3 add 在途期间记录最新状态和合并情况。
+#define S4_FAULT_RESYNC  2
+#define S4_FAULT_INVALID 4
+static u32 xdata s4_fault_latest;
+static u32 xdata s4_fault_seq;
+static u8 s4_fault_flags;
 static u8 s4_fault_state;
 static u8 s4_fault_scans;
 static u8 s4_fault_sent; //20261124-2 add 只累计已经开始发送的次数。
@@ -200,6 +207,7 @@ void uart4_fault_start(u32 boot) //20261124-2 change
 {
     s4_fault_boot = boot;
     s4_fault_scans = 0;
+    s4_fault_flags = 0; //20261124-3 add 每次可信启动独立建立状态。
     s4_fault_sent = 0;
     if (boot != 0 && s4_fault_stop_mark != S4_FAULT_STOP_MARK) {
         s4_fault_state = S4_FAULT_BASELINE;
@@ -207,27 +215,64 @@ void uart4_fault_start(u32 boot) //20261124-2 change
 }
 
 /******************************************************************************
+ * 函数名称       : uart4_queue_fault
+ * 功能描述       : 冻结最新有效状态并开始该事件自己的发送计数。
+ * 输入参数       : kind，主动事件类别。
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void uart4_queue_fault(u8 kind) //20261124-3 add
+{
+    bf4g_fault_encode(s4_fault_frame, s4_fault_boot, s4_fault_seq, kind, s4_fault_latest);
+    s4_fault_flags = 0;                 // 后续采样只能更新下一条事件的状态。
+    s4_fault_sent = 0;
+    s4_fault_state = S4_FAULT_READY;
+}
+
+/******************************************************************************
  * 函数名称       : uart4_fault_scanned
- * 功能描述       : 启动就绪后记录保护扫描，并冻结第一份有效故障位图。
+ * 功能描述       : 在保护扫描后更新最新有效位图和已观察变化的序号。
  * 输入参数       : one_second，一表示一秒组，零表示百毫秒组。
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-void uart4_fault_scanned(bit one_second) //20261124-0 add
+void uart4_fault_scanned(bit one_second) //20261124-3 change
 {
-    if (s4_fault_state != S4_FAULT_BASELINE || !Boot_Flag) {
+    u32 faults;
+
+    if (s4_fault_state == S4_FAULT_DISABLED || !Boot_Flag) {
         return;
     }
     if (one_second) {
         s4_fault_scans |= 2;
     } else {
         if (s4_fault_scans & 1) {
-            return;                      // 两组齐备后在一秒组结束处采集后续样本。
+            return;                    // 两组都运行后只在一秒组结束时采样。
         }
         s4_fault_scans |= 1;
     }
-    if (s4_fault_scans == 3 && bf4g_fault_baseline(s4_fault_frame, s4_fault_boot)) {
-        s4_fault_state = S4_FAULT_READY;  // 串口空闲前保留这份首帧。
+    if (s4_fault_scans != 3) {
+        return;
+    }
+    if (!bf4g_fault_sample(&faults)) {
+        s4_fault_flags |= S4_FAULT_INVALID;
+        return;
+    }
+    if (s4_fault_state == S4_FAULT_BASELINE) {
+        s4_fault_latest = faults;
+        s4_fault_seq = 1;
+        uart4_queue_fault(0);
+    } else if (faults != s4_fault_latest || (s4_fault_flags & S4_FAULT_INVALID)) {
+        if (s4_fault_seq == 0xffffffffUL) {
+            return;                    // 本启动内不复用序号，待下次上电建立基线。
+        }
+        if (s4_fault_flags & (S4_FAULT_CHANGED | S4_FAULT_INVALID)) {
+            s4_fault_flags |= S4_FAULT_RESYNC; // 已有变化被合并，或样本恢复有效。
+        }
+        s4_fault_flags &= ~S4_FAULT_INVALID;
+        s4_fault_flags |= S4_FAULT_CHANGED;
+        s4_fault_latest = faults;
+        s4_fault_seq++;                 // 已知中间变化占用其序号，因此合并后有可见缺口。
     }
 }
 
@@ -394,7 +439,7 @@ static void uart4_send_fault(void) //20261124-2 change
  * 返回值         : None
  * 日期            : 2026.11.17
  ******************************************************************************/
-void uart4_service(void) //20261124-2 change
+void uart4_service(void) //20261124-3 change
 {
     u8 length;
     bit interrupts;
@@ -410,6 +455,10 @@ void uart4_service(void) //20261124-2 change
         return;
     }
     if (s4_state != S4_READY) {
+        if (s4_state == S4_IDLE && s4_fault_state == S4_FAULT_IDLE &&
+            (s4_fault_flags & (S4_FAULT_CHANGED | S4_FAULT_INVALID)) == S4_FAULT_CHANGED) {
+            uart4_queue_fault((s4_fault_flags & S4_FAULT_RESYNC) != 0 ? 2 : 1);
+        }
         if (s4_state == S4_IDLE &&
             (s4_fault_state == S4_FAULT_READY || (s4_fault_state == S4_FAULT_WAIT && s4_fault_due))) {
             uart4_send_fault();
@@ -426,7 +475,7 @@ void uart4_service(void) //20261124-2 change
             s4_fault_timeout = 0;
             s4_fault_due = 0;
             EA = interrupts;
-            s4_fault_state = S4_FAULT_DISABLED; // 本帧已经确认，取消这轮计时。
+            s4_fault_state = S4_FAULT_IDLE; // 本帧已经确认，可以创建后续状态帧。
         }
         uart4_finish(0);
         return;

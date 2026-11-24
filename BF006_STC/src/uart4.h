@@ -13,7 +13,8 @@ void uart4_fault_start(u32 boot); //20261124-0 add ÓÉÒÑ¿É¿¿È¡µÃ±àºÅµÄÆô¶¯Â·¾¶ÆôÓ
 void uart4_fault_scanned(bit one_second); //20261124-0 add ÔÚÏàÓ¦±£»¤×é½áÊøºóÍ¨Öª¡£
 bit uart4_fault_awaiting_ack(void); //20261124-0 add ²éÑ¯Ô­Ö¡µÄµÈ´ıÈ·ÈÏ×´Ì¬¡£
 #define BF4G_FAULT_FRAME_LENGTH 24 //20261124-0 add Ö÷¶¯¹ÊÕÏÖ¡ÍêÕû³¤¶È¡£
-bit bf4g_fault_baseline(u8 xdata *frame, u32 boot); //20261124-0 add ±àÂëÓĞĞ§µÄÆô¶¯»ùÏß¡£
+bit bf4g_fault_sample(u32 *faults); //20261124-3 add ¶ÁÈ¡»î¶¯Î»Í¼ºÍÖÊÁ¿¡£
+void bf4g_fault_encode(u8 xdata *frame, u32 boot, u32 seq, u8 kind, u32 faults); //20261124-3 add ĞÎ³ÉÖ÷¶¯ÊÂ¼ş¡£
 bit bf4g_fault_ack_matches(const u8 xdata *frame, u8 length, const u8 xdata *event); //20261124-0 add Ğ£ÑéÖ÷¶¯È·ÈÏ¡£
 void uart4_control_scanned(void); //20261117-7 add
 bit uart4_sending(void);

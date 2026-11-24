@@ -2307,6 +2307,98 @@ static void check_fault_retries(bit ack_on_last) //20261124-2 add
 }
 
 /******************************************************************************
+ * 函数名称       : ack_fault_frame
+ * 功能描述       : 按收到的事件身份发送匹配确认。
+ * 输入参数       : frame，收到的主动事件。
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void ack_fault_frame(const u8 *frame) //20261124-3 add
+{
+    u8 ack[20];
+
+    memcpy(ack, frame, 8);
+    ack[5] = 0xa0;
+    ack[8] = 9;
+    ack[9] = 0;
+    memcpy(ack + 10, frame + 9, 8);
+    fill_crc(ack, sizeof(ack));
+    send_request(ack, sizeof(ack));
+}
+
+/******************************************************************************
+ * 函数名称       : check_fault_changes
+ * 功能描述       : 验证普通变化、合并回到原值和无效后同值恢复。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_changes(void) //20261124-3 add
+{
+    u8 frame[24];
+
+    uart_init();
+    uart4_fault_cold_start();
+    uart4_fault_start(7);
+    config.Dev_Address = 1;
+    Boot_Flag = 1;
+    sys.Fault_Error = 0;
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+
+    sys.Fault_Error = 4;
+    uart4_fault_scanned(1);
+    sys.Fault_Error = 0;
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+    ack_fault_frame(frame);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+    CHECK(frame[7] == 3 && frame[16] == 3 && frame[17] == 2 && frame[21] == 0);
+    ack_fault_frame(frame);
+
+    sys.Fault_Error = 5;
+    uart4_fault_scanned(1);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+    CHECK(frame[16] == 4 && frame[17] == 1 && frame[21] == 5);
+    sys.Fault_Error = 4;
+    uart4_fault_scanned(1);
+    ack_fault_frame(frame);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+    CHECK(frame[16] == 5 && frame[17] == 1 && frame[21] == 4);
+    ack_fault_frame(frame);
+
+    sys.Fault_Error = 0x80010000UL;
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+    sys.Fault_Error = 4;
+    uart4_fault_scanned(1);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+    CHECK(frame[16] == 6 && frame[17] == 2 && frame[21] == 4);
+    ack_fault_frame(frame);
+
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+    sys.Fault_Error = 0x00010000UL;
+    uart4_fault_scanned(1);
+    uart4_service();
+    if (TEST_PUMPS == 2) {
+        collect_reply(frame, sizeof(frame), 0);
+        CHECK(frame[16] == 7 && frame[17] == 1 && frame[19] == 1 && frame[21] == 0);
+    } else {
+        CHECK(!uart4_sending());
+    }
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -2408,6 +2500,7 @@ int main(void) //20261116-0 add
     check_fault_boot_store(); //20261124-1 add 检查首次初始化和安全续号。
     check_fault_retries(0); //20261124-2 add 核对重发、停报和再次上电。
     check_fault_retries(1);
+    check_fault_changes(); //20261124-3 add 核对完整活动位图及等待期间的合并。
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }
