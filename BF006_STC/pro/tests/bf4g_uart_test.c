@@ -2041,6 +2041,33 @@ static void check_sensor_switch_hysteresis(void) //20261116-14 add
 }
 
 /******************************************************************************
+ * 函数名称       : collect_fault
+ * 功能描述       : 收集独立发送的故障帧并推进发送尾部与静默。
+ * 输入参数       : frame，收集位置。
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void collect_fault(u8 *frame) //20261124-4 add
+{
+    u8 i;
+
+    for (i = 0; i < 24; i++) {
+        CHECK(uart4_sending());
+        frame[i] = S4BUF;
+        S4CON |= 2;
+        UART4_int();
+    }
+    CHECK(uart4_sending());
+    uart4_fault_tick();
+    CHECK(uart4_sending());
+    uart4_fault_tick();
+    CHECK(!uart4_sending());
+    for (i = 0; i < 11; i++) {
+        uart4_fault_tick();
+    }
+}
+
+/******************************************************************************
  * 函数名称       : check_fault_baseline
  * 功能描述       : 模拟两组保护检查后捕获完整的健康首帧。
  * 输入参数       : None
@@ -2073,7 +2100,7 @@ static void check_fault_baseline(void) //20261124-0 add
     CHECK(!uart4_sending());
     uart4_fault_scanned(0);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
     CHECK(memcmp(frame, expected, sizeof(frame)) == 0);
 
     uart4_fault_scanned(1);
@@ -2160,7 +2187,7 @@ static void check_fault_baseline_with_faults(void) //20261124-0 add
     sys.Fault_Error = 5;
     uart4_fault_scanned(1);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
     CHECK(frame[5] == 0x20 && frame[7] == 1 && frame[8] == 13);
     CHECK(frame[9] == 0x12 && frame[10] == 0x34 && frame[11] == 0x56 && frame[12] == 0x78);
     CHECK(frame[16] == 1 && frame[17] == 0);
@@ -2256,23 +2283,23 @@ static void check_fault_retries(bit ack_on_last) //20261124-2 add
     uart4_service();
     CHECK(uart4_sending());
     fault_ticks(6000);                   // 发送还未结束，确认窗口不能提前开始。
-    collect_reply(original, sizeof(original), 0);
+    collect_fault(original);
     for (retry = 0; retry < 10; retry++) {
-        fault_ticks(5000);
+        fault_ticks(4989);
         CHECK(!uart4_sending());
         if (retry == 0) {
             send_request(info_request, sizeof(info_request));
             fault_ticks(1);
             collect_reply(ordinary, sizeof(ordinary), 0);
-            uart4_service();
+            fault_ticks(11);
         } else {
             fault_ticks(1);
         }
-        collect_reply(frame, sizeof(frame), 0);
+        collect_fault(frame);
         CHECK(memcmp(frame, original, sizeof(frame)) == 0);
     }
 
-    fault_ticks(5000);
+    fault_ticks(4989);
     CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
     fill_crc(ack, sizeof(ack));
     if (ack_on_last) {
@@ -2302,7 +2329,7 @@ static void check_fault_retries(bit ack_on_last) //20261124-2 add
     uart4_fault_scanned(0);
     uart4_fault_scanned(1);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
     CHECK(frame[12] == 3 && frame[21] == 4);
 }
 
@@ -2346,7 +2373,7 @@ static void check_fault_changes(void) //20261124-3 add
     uart4_fault_scanned(0);
     uart4_fault_scanned(1);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
 
     sys.Fault_Error = 4;
     uart4_fault_scanned(1);
@@ -2356,20 +2383,20 @@ static void check_fault_changes(void) //20261124-3 add
     CHECK(!uart4_sending());
     ack_fault_frame(frame);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
     CHECK(frame[7] == 3 && frame[16] == 3 && frame[17] == 2 && frame[21] == 0);
     ack_fault_frame(frame);
 
     sys.Fault_Error = 5;
     uart4_fault_scanned(1);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
     CHECK(frame[16] == 4 && frame[17] == 1 && frame[21] == 5);
     sys.Fault_Error = 4;
     uart4_fault_scanned(1);
     ack_fault_frame(frame);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
     CHECK(frame[16] == 5 && frame[17] == 1 && frame[21] == 4);
     ack_fault_frame(frame);
 
@@ -2380,7 +2407,7 @@ static void check_fault_changes(void) //20261124-3 add
     sys.Fault_Error = 4;
     uart4_fault_scanned(1);
     uart4_service();
-    collect_reply(frame, sizeof(frame), 0);
+    collect_fault(frame);
     CHECK(frame[16] == 6 && frame[17] == 2 && frame[21] == 4);
     ack_fault_frame(frame);
 
@@ -2391,11 +2418,123 @@ static void check_fault_changes(void) //20261124-3 add
     uart4_fault_scanned(1);
     uart4_service();
     if (TEST_PUMPS == 2) {
-        collect_reply(frame, sizeof(frame), 0);
+        collect_fault(frame);
         CHECK(frame[16] == 7 && frame[17] == 1 && frame[19] == 1 && frame[21] == 0);
     } else {
         CHECK(!uart4_sending());
     }
+}
+
+/******************************************************************************
+ * 函数名称       : check_fault_stop_overlap
+ * 功能描述       : 在主动发送期间注入第一条停泵请求并验证唯一的最终应答。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_stop_overlap(void) //20261124-4 add
+{
+    u8 stop[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0, 1, 2, 2, 1, 0, 0};
+    u8 event[24];
+    u8 reply[20];
+    u8 i;
+
+    uart_init();
+    uart4_fault_cold_start();
+    uart4_fault_start(7);
+    config.Dev_Address = 1;
+    config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
+    Boot_Flag = 1;
+    sys.Pump_A_ON = 1;
+    sys.Pump_A_state = 1;
+    sys.Fault_Error = 0;
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+
+    fill_crc(stop, sizeof(stop));
+    for (i = 0; i < sizeof(event); i++) {
+        CHECK(uart4_sending() && uart4_blocks_save());
+        event[i] = S4BUF;
+        if (i < sizeof(stop)) {
+            receive_byte(stop[i]);      // 第一字节分别从两个方向同时开始传输。
+        }
+        if (i == sizeof(stop) + 9) {
+            timer_expire();              // 停泵请求在故障帧结束前收全。
+        }
+        S4CON |= 2;
+        UART4_int();
+    }
+    CHECK(crc(event, sizeof(event)) == 0);
+    CHECK(uart4_sending());
+    fault_ticks(1);
+    CHECK(uart4_sending());
+    fault_ticks(1);
+    CHECK(!uart4_sending());
+    fault_ticks(10);
+    scan_control();
+    CHECK(!uart4_sending());           // 未达到主动帧后的完整静默。
+    fault_ticks(1);
+    CHECK(uart4_blocks_save() && !uart4_sending());
+    ack_fault_frame(event);
+    CHECK(uart4_fault_awaiting_ack());
+    scan_control();
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(reply[5] == 0x91 && reply[7] == 1 && reply[9] == 0);
+    CHECK(reply[10] == 2 && (reply[13] & 0x10) == 0 && crc(reply, sizeof(reply)) == 0);
+    CHECK(!sys.Pump_A_ON);
+    timer_expire();                     // 等待期间额外数据丢弃后重新同步。
+    ack_fault_frame(event);
+    fault_ticks(20);
+    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
+}
+
+/******************************************************************************
+ * 函数名称       : check_fault_address_change
+ * 功能描述       : 验证改址后仍保留旧址原帧，普通请求和后续帧使用新址。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_address_change(void) //20261124-4 add
+{
+    u8 write[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0, 1, 3, 11, 0, 2, 0, 0};
+    u8 reply[15];
+    u8 original[24];
+    u8 event[24];
+
+    uart_init();
+    uart4_fault_cold_start();
+    uart4_fault_start(7);
+    config.Dev_Address = 1;
+    Boot_Flag = 1;
+    sys.Fault_Error = 4;
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    collect_fault(original);
+
+    fill_crc(write, sizeof(write));
+    send_request(write, sizeof(write));
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(config.Dev_Address == 2 && reply[0] == 1 && reply[5] == 0x90);
+    sys.Fault_Error = 0;
+    uart4_fault_scanned(1);
+    fault_ticks(4990);
+    collect_fault(event);
+    CHECK(memcmp(event, original, sizeof(event)) == 0);
+
+    event[0] = 2;
+    ack_fault_frame(event);
+    CHECK(uart4_fault_awaiting_ack());
+    query_address(1, 0);
+    query_address(2, 1);
+    ack_fault_frame(original);
+    CHECK(!uart4_fault_awaiting_ack());
+    fault_ticks(11);
+    collect_fault(event);
+    CHECK(event[0] == 2 && event[16] == 2 && event[17] == 1 && event[21] == 0);
+    CHECK(crc(event, sizeof(event)) == 0);
 }
 
 /******************************************************************************
@@ -2501,6 +2640,8 @@ int main(void) //20261116-0 add
     check_fault_retries(0); //20261124-2 add 核对重发、停报和再次上电。
     check_fault_retries(1);
     check_fault_changes(); //20261124-3 add 核对完整活动位图及等待期间的合并。
+    check_fault_stop_overlap(); //20261124-4 add 验证主动发送和首次停泵重叠。
+    check_fault_address_change(); //20261124-4 add 验证改址后原事件的确认范围。
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }
