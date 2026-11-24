@@ -970,7 +970,7 @@ void Analyse_4G(void)
 #define BF4G_PARAM_SOURCE(number) (0x80 | (number)) //20261116-10 add 紧凑布局中的参数来源标记。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
-#define BF4G_CAPABILITIES 0x001f //20261116-8 change 打开已验证的控制能力。
+#define BF4G_CAPABILITIES 0x003f //20261124-5 change 宣告完整的主动故障上报能力。
 
 /******************************************************************************
  * 函数名称       : bf4g_crc
@@ -1049,7 +1049,7 @@ static u16 bf4g_model_word(void) //20261116-0 add
 static void bf4g_device_info(u8 xdata *out) //20261116-0 add
 {
     out[0] = 0;
-    out[1] = 1; //20261117-7 change 标识控制应答使用扫描确认后的结果。
+    out[1] = 2; //20261124-5 change 新修订继续使用扫描确认后的控制应答。
     bf4g_put_u16(out + 2, bf4g_model_word());
     bf4g_put_u16(out + 4, MODBUS_NEW_VERSION);
     out[6] = Model_Voltage == Model_1PH ? 1 : 3;

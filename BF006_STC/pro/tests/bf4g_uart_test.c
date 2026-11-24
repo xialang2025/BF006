@@ -265,8 +265,8 @@ static void check_info(u8 interfere) //20261116-0 add
     u8 reply[27];
     static const u8 expected[] = {
         0x01, 0x43, 0xbf, 0x06, 0x03, 0x81, 0x00, 0x01, 0x10,
-        0x00, 0x01, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8,
-        TEST_VOLTS & 0xff, 0x00, 0x1f, 0x61, 0x10, 0x09, 0x08
+        0x00, 0x02, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8, //20261124-5 change
+        TEST_VOLTS & 0xff, 0x00, 0x3f, 0x61, 0x10, 0x09, 0x08
     };
 
     send_request(info_request, sizeof(info_request));
@@ -1834,7 +1834,7 @@ static void check_final_vectors(void) //20261116-12 add
 
     if (TEST_PUMPS == 2 && TEST_PHASES == 1) {
         check_vector("0143BF0603010001004984",
-                     "0143BF0603810001100001A39300C9010200DC001F61100908CC75", 27);
+                     "0143BF0603810001100002A39300C9010200DC003F611009080EB3", 27); //20261124-5 change 修订与能力变更后的完整设备信息。
     }
     check_vector("0143BF06030200020203015774", "0143BF0603820002060003010000646BA2", 17);
     check_vector("0143BF0603100003030303843AC0", "0143BF060390000304000303849E64", 15);
@@ -2538,6 +2538,54 @@ static void check_fault_address_change(void) //20261124-4 add
 }
 
 /******************************************************************************
+ * 函数名称       : check_fault_rid_wrap
+ * 功能描述       : 核对关联号回卷和三十二位序号的大端编码。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_rid_wrap(void) //20261124-5 add
+{
+    u8 frame[24];
+
+    bf4g_fault_encode(frame, 1, 65535UL, 1, 0);
+    CHECK(frame[6] == 0xff && frame[7] == 0xff && crc(frame, sizeof(frame)) == 0);
+    bf4g_fault_encode(frame, 1, 65536UL, 1, 0);
+    CHECK(frame[6] == 0 && frame[7] == 1 && frame[14] == 1 && frame[16] == 0);
+    bf4g_fault_encode(frame, 1, 0xffffffffUL, 2, 0);
+    CHECK(frame[6] == 0xff && frame[7] == 0xff && frame[13] == 0xff && frame[16] == 0xff);
+    CHECK(crc(frame, sizeof(frame)) == 0);
+}
+
+/******************************************************************************
+ * 函数名称       : check_fault_mask_matrix
+ * 功能描述       : 逐位验证六种机型的全部故障位适用范围。
+ * 输入参数       : None
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_mask_matrix(void) //20261124-5 add
+{
+    u32 allowed = 0x0001ffffUL;
+    u32 value;
+    u32 mask;
+    u8 i;
+
+    if (TEST_PHASES == 1) {
+        allowed &= ~0x00000e70UL;
+    }
+    if (TEST_PUMPS == 1) {
+        allowed &= ~0x00014f80UL;
+    }
+    for (i = 0; i < 32; i++) {
+        mask = (u32)1 << i;
+        sys.Fault_Error = mask;
+        CHECK(bf4g_fault_sample(&value) == ((mask & allowed) != 0));
+        CHECK(value == mask);
+    }
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -2548,6 +2596,7 @@ int main(void) //20261116-0 add
 {
     u8 bad[98];
     u8 i;
+    u8 boot_writes_before_reporting; //20261124-5 add 常规上报全流程的编号写入基线。
 
     config.Dev_Address = 1;
     config_loaded = 1;
@@ -2637,11 +2686,15 @@ int main(void) //20261116-0 add
     check_fault_ack(); //20261124-0 add 校验主动报文确认边界。
     check_fault_baseline_with_faults(); //20261124-0 add 核对带故障启机和无效位图。
     check_fault_boot_store(); //20261124-1 add 检查首次初始化和安全续号。
+    boot_writes_before_reporting = boot_writes;
     check_fault_retries(0); //20261124-2 add 核对重发、停报和再次上电。
     check_fault_retries(1);
     check_fault_changes(); //20261124-3 add 核对完整活动位图及等待期间的合并。
     check_fault_stop_overlap(); //20261124-4 add 验证主动发送和首次停泵重叠。
     check_fault_address_change(); //20261124-4 add 验证改址后原事件的确认范围。
+    check_fault_rid_wrap(); //20261124-5 add 确认关联号独立于完整报文序号。
+    check_fault_mask_matrix();
+    CHECK(boot_writes == boot_writes_before_reporting);
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }
