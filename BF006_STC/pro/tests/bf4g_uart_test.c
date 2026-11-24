@@ -2215,6 +2215,98 @@ static void check_fault_boot_store(void) //20261124-1 add
 }
 
 /******************************************************************************
+ * 函数名称       : fault_ticks
+ * 功能描述       : 模拟实际经过的毫秒节拍。
+ * 输入参数       : count，节拍数。
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void fault_ticks(u16 count) //20261124-2 add
+{
+    while (count != 0) {
+        uart4_fault_tick();
+        uart4_service();
+        count--;
+    }
+}
+
+/******************************************************************************
+ * 函数名称       : check_fault_retries
+ * 功能描述       : 验证重发原帧、最后确认窗口及重新上电。
+ * 输入参数       : ack_on_last，是否在最后窗口提供确认。
+ * 返回值         : None
+ * 日期            : 2026.11.24
+ ******************************************************************************/
+static void check_fault_retries(bit ack_on_last) //20261124-2 add
+{
+    u8 original[24];
+    u8 frame[24];
+    u8 ordinary[27];
+    u8 ack[20] = {1, 0x43, 0xbf, 6, 3, 0xa0, 0, 1, 9, 0, 0, 0, 0, 1, 0, 0, 0, 1};
+    u8 retry;
+
+    uart_init();
+    uart4_fault_cold_start();
+    uart4_fault_start(1);
+    config.Dev_Address = 1;
+    Boot_Flag = 1;
+    sys.Fault_Error = 0;
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(uart4_sending());
+    fault_ticks(6000);                   // 发送还未结束，确认窗口不能提前开始。
+    collect_reply(original, sizeof(original), 0);
+    for (retry = 0; retry < 10; retry++) {
+        fault_ticks(5000);
+        CHECK(!uart4_sending());
+        if (retry == 0) {
+            send_request(info_request, sizeof(info_request));
+            fault_ticks(1);
+            collect_reply(ordinary, sizeof(ordinary), 0);
+            uart4_service();
+        } else {
+            fault_ticks(1);
+        }
+        collect_reply(frame, sizeof(frame), 0);
+        CHECK(memcmp(frame, original, sizeof(frame)) == 0);
+    }
+
+    fault_ticks(5000);
+    CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
+    fill_crc(ack, sizeof(ack));
+    if (ack_on_last) {
+        send_request(ack, sizeof(ack));
+        CHECK(!uart4_fault_awaiting_ack());
+        return;
+    }
+
+    fault_ticks(1);
+    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
+    send_request(ack, sizeof(ack));      // 停发后迟到确认不能恢复。
+    sys.Fault_Error = 4;
+    uart4_fault_scanned(1);
+    fault_ticks(6000);
+    CHECK(!uart4_sending());
+    check_info(0);
+
+    uart_init();                        // 软件复位仍属于本次通电。
+    uart4_fault_start(2);
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+
+    uart4_fault_cold_start();            // 模拟控制器失电后重新上电。
+    uart4_fault_start(3);
+    uart4_fault_scanned(0);
+    uart4_fault_scanned(1);
+    uart4_service();
+    collect_reply(frame, sizeof(frame), 0);
+    CHECK(frame[12] == 3 && frame[21] == 4);
+}
+
+/******************************************************************************
  * 函数名称       : main
  * 功能描述       : 从串口入口验证设备信息、报文破坏和静默恢复。
  * 输入参数       : None
@@ -2314,6 +2406,8 @@ int main(void) //20261116-0 add
     check_fault_ack(); //20261124-0 add 校验主动报文确认边界。
     check_fault_baseline_with_faults(); //20261124-0 add 核对带故障启机和无效位图。
     check_fault_boot_store(); //20261124-1 add 检查首次初始化和安全续号。
+    check_fault_retries(0); //20261124-2 add 核对重发、停报和再次上电。
+    check_fault_retries(1);
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

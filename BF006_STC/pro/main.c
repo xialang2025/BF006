@@ -29,6 +29,10 @@ void main(void)
     sys_init();
     Par_Init();
     uart_init(); //20261113-0 change 在开放全局中断前完成串口四配置
+    if (PCON & 0x10) { //20261124-2 add 识别断电后重新上电，软件复位保留停报。
+        PCON &= ~0x10;
+        uart4_fault_cold_start();
+    }
     uart4_fault_start(Par_AdvanceFaultBoot()); //20261124-1 add 编号保存失败时只关闭主动上报。
     EA = 1; // 允许CPU 全局中断
     RS485_EN  = 0;

@@ -7,6 +7,8 @@
 
 void uart_init(void);
 void uart4_service(void);
+void uart4_fault_tick(void); //20261124-2 add 由一毫秒定时中断驱动确认窗口。
+void uart4_fault_cold_start(void); //20261124-2 add 新通电周期清除停报记号。
 void uart4_fault_start(u32 boot); //20261124-0 add 由已可靠取得编号的启动路径启用上报。
 void uart4_fault_scanned(bit one_second); //20261124-0 add 在相应保护组结束后通知。
 bit uart4_fault_awaiting_ack(void); //20261124-0 add 查询原帧的等待确认状态。
