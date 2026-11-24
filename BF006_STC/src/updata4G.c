@@ -970,7 +970,7 @@ void Analyse_4G(void)
 #define BF4G_PARAM_SOURCE(number) (0x80 | (number)) //20261116-10 add 紧凑布局中的参数来源标记。
 #define BF4G_DATA         9
 #define BF4G_OVERHEAD     11
-#define BF4G_CAPABILITIES 0x003f //20261124-5 change 宣告完整的主动故障上报能力。
+#define BF4G_CAPABILITIES 0x001f //20261124-8 change 普通查询和控制沿用原能力，不宣告带确认的故障事件。
 
 /******************************************************************************
  * 函数名称       : bf4g_crc
@@ -1049,7 +1049,7 @@ static u16 bf4g_model_word(void) //20261116-0 add
 static void bf4g_device_info(u8 xdata *out) //20261116-0 add
 {
     out[0] = 0;
-    out[1] = 2; //20261124-5 change 新修订继续使用扫描确认后的控制应答。
+    out[1] = 1; //20261124-8 change 普通协议保留控制最终应答，简化状态用独立命令识别。
     bf4g_put_u16(out + 2, bf4g_model_word());
     bf4g_put_u16(out + 4, MODBUS_NEW_VERSION);
     out[6] = Model_Voltage == Model_1PH ? 1 : 3;
@@ -1676,12 +1676,12 @@ bit bf4g_fault_sample(u32 *faults) //20261124-3 add
 
 /******************************************************************************
  * 函数名称       : bf4g_fault_encode
- * 功能描述       : 封装全量活动故障事件，保留创建时的地址。
- * 输入参数       : frame，上报缓冲；boot，启动编号；seq，报文序号；kind，类别；faults，有效位图。
+ * 功能描述       : 封装当前完整活动故障位图，高字节在前，零表示全部恢复。
+ * 输入参数       : frame，发送缓冲区；faults，当前有效故障位图。
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-void bf4g_fault_encode(u8 xdata *frame, u32 boot, u32 seq, u8 kind, u32 faults) //20261124-3 add
+void bf4g_fault_encode(u8 xdata *frame, u32 faults) //20261124-8 change
 {
     u16 crc;
 
@@ -1690,44 +1690,13 @@ void bf4g_fault_encode(u8 xdata *frame, u32 boot, u32 seq, u8 kind, u32 faults) 
     frame[2] = 0xbf;
     frame[3] = 0x06;
     frame[4] = BF4G_FMT;
-    frame[5] = 0x20;
-    bf4g_put_u16(frame + 6, (u16)(1 + (seq - 1) % 65535UL)); // 序号跨过关联号上限后重新从一开始。
-    frame[8] = 13;
-    bf4g_put_u32(frame + BF4G_DATA, boot);
-    bf4g_put_u32(frame + BF4G_DATA + 4, seq);
-    frame[17] = kind;
-    bf4g_put_u32(frame + 18, faults);
+    frame[5] = 0x21;                    // 简化状态命令，数据区仅含故障位图。
+    bf4g_put_u16(frame + 6, 1);         // 无需应答，公共头的非零关联号固定填一。
+    frame[8] = 4;
+    bf4g_put_u32(frame + BF4G_DATA, faults);
     crc = bf4g_crc(frame, BF4G_FAULT_FRAME_LENGTH - 2);
-    frame[22] = crc;
-    frame[23] = crc >> 8;
-}
-
-/******************************************************************************
- * 函数名称       : bf4g_fault_ack_matches
- * 功能描述       : 完整核对接收确认是否对应唯一待确认的主动帧。
- * 输入参数       : frame，收到的报文；length，实收长度；event，待确认原帧。
- * 返回值         : 全部字段匹配时为一。
- * 日期            : 2026.11.24
- ******************************************************************************/
-bit bf4g_fault_ack_matches(const u8 xdata *frame, u8 length, const u8 xdata *event) //20261124-0 add
-{
-    u8 i;
-
-    if (length != 20 || frame[5] != 0xa0 || frame[8] != 9 || frame[9] != 0 ||
-        frame[6] != event[6] || frame[7] != event[7]) {
-        return 0;
-    }
-    for (i = 0; i < 5; i++) {
-        if (frame[i] != event[i]) {
-            return 0;                   // 同时校验地址、公共头和格式。
-        }
-    }
-    for (i = 0; i < 8; i++) {
-        if (frame[10 + i] != event[BF4G_DATA + i]) {
-            return 0;                   // 回显的启动编号和序号必须完全相同。
-        }
-    }
-    return bf4g_crc(frame, length) == 0;
+    frame[13] = (u8)crc;
+    frame[14] = (u8)(crc >> 8);
 }
 
 /******************************************************************************

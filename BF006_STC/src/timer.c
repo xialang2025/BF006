@@ -1,6 +1,6 @@
 #include "system.h"
 #include "ad.h"
-#include "uart4.h" //20261124-2 change 主动故障确认窗口使用一毫秒节拍。
+#include "uart4.h" //20261124-8 change 提供主动帧尾部和帧间静默的毫秒节拍。
 
 #define	Timer0_Reload	(MAIN_Fosc / 1000)		//Timer 0 中断频率, 1000HZ
 #define	Timer1_Reload	(MAIN_Fosc / 10000)		//Timer 0 中断频率, 10000HZ
@@ -57,7 +57,7 @@ void TIM0_IRQHandler (void) interrupt TIMER0_VECTOR
 	static u16 Timer_1S = 0;
 	P55 = 1;
     Timer_1ms_Flag = 1;
-    uart4_fault_tick(); //20261124-2 add 串口发送完毕后累计确认等待时间。
+    uart4_fault_tick(); //20261124-8 change 提供主动帧尾部和帧间静默的毫秒节拍。
 	Water_Level();
 
 #if (Function_RS485 == 1)

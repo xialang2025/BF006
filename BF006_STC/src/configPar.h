@@ -83,7 +83,6 @@ typedef struct{
 }config_t;
 
 void Par_Init(void);
-u32 Par_AdvanceFaultBoot(void); //20261124-1 add 可靠保存本次启动编号，异常时返回零。
 void save_pro(void);
 void Total_Time_Second_Handle(u8 pump_running); //20260430-3 add
 void Total_Run_Time_Clear(void);                //20260501-1 add clear total run time

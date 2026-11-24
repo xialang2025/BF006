@@ -3,7 +3,7 @@
 #include <string.h>
 #include "uart4.h"
 #include "configPar.h"
-#include "eeprom.h" //20261124-6 add 使用实际设备的台架初始化开关。
+#include "eeprom.h"
 #include "ad.h"
 #include "Display.h"
 #include "HT1622.h"
@@ -13,12 +13,6 @@ u16 Limit_Current;
 const u16 Value_OVP = 480;
 static u8 flash[117];
 static u8 flash_writes;
-static u8 boot_flash[2][512]; //20261124-6 change 模拟编号扇区全长和末端已有数据。
-#if BF4G_BENCH_BOOT_INIT
-static bit boot_probe_available = 1;
-#endif
-static u8 boot_writes;
-static u8 boot_write_limit = 12; //20261124-1 add 模拟断电时只写完记录的一部分。
 static u32 control_faults;
 static u8 simulate_rf;
 union NUM_REG NUM5, NUM6, NUM7, NUM8;
@@ -69,11 +63,6 @@ void Speak_Con(u8 value) //20261116-2 add
  ******************************************************************************/
 void EEPROM_read_n(u16 address, u8 *out, u16 length) //20261116-4 add
 {
-    if (address == 0x0200 || address == 0x0400) { //20261124-1 add 编号读入与参数区独立。
-        CHECK(length == 12);
-        memcpy(out, boot_flash[address == 0x0400], length);
-        return;
-    }
     CHECK(address == 0 && length == sizeof(flash));
     memcpy(out, flash, length);
 }
@@ -87,10 +76,6 @@ void EEPROM_read_n(u16 address, u8 *out, u16 length) //20261116-4 add
  ******************************************************************************/
 void EEPROM_SectorErase(u16 address) //20261116-4 add
 {
-    if (address == 0x0200 || address == 0x0400) { //20261124-1 add 模拟单个编号扇区被擦除。
-        memset(boot_flash[address == 0x0400], 0xff, sizeof(boot_flash[0]));
-        return;
-    }
     CHECK(address == 0);
     memset(flash, 0xff, sizeof(flash));
 }
@@ -104,50 +89,11 @@ void EEPROM_SectorErase(u16 address) //20261116-4 add
  ******************************************************************************/
 void EEPROM_write_n(u16 address, u8 *source, u16 length) //20261116-4 add
 {
-    if (address == 0x0200 || address == 0x0400) { //20261124-1 add 写入前须已经擦除编号扇区。
-        u8 *slot = boot_flash[address == 0x0400];
-        u8 i;
-
-        CHECK(length == 12);
-        for (i = 0; i < length; i++) {
-            CHECK(slot[i] == 0xff);
-        }
-        memcpy(slot, source, boot_write_limit);
-        boot_writes++;
-        return;
-    }
     CHECK(address == 0 && length == sizeof(flash));
     CHECK(flash[0] == 0xff && flash[sizeof(flash) - 1] == 0xff);
     memcpy(flash, source, length);
     flash_writes++;
 }
-
-#if BF4G_BENCH_BOOT_INIT
-/******************************************************************************
- * 函数名称       : EEPROM_is_erased
- * 功能描述       : 模拟读取编号扇区和数据区不可用。
- * 输入参数       : address，扇区地址；length，检查长度。
- * 返回值         : 区间可读且为擦除值时为一。
- * 日期            : 2026.11.24
- ******************************************************************************/
-bit EEPROM_is_erased(u16 address, u16 length) //20261124-6 add
-{
-    const u8 *slot;
-    u16 i;
-
-    CHECK((address == 0x0200 || address == 0x0400) && length == 512);
-    if (!boot_probe_available) {
-        return 0;
-    }
-    slot = boot_flash[address == 0x0400];
-    for (i = 0; i < length; i++) {
-        if (slot[i] != 0xff) {
-            return 0;
-        }
-    }
-    return 1;
-}
-#endif
 
 /******************************************************************************
  * 函数名称       : Speak_Stop
@@ -296,8 +242,8 @@ static void check_info(u8 interfere) //20261116-0 add
     u8 reply[27];
     static const u8 expected[] = {
         0x01, 0x43, 0xbf, 0x06, 0x03, 0x81, 0x00, 0x01, 0x10,
-        0x00, 0x02, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8, //20261124-5 change
-        TEST_VOLTS & 0xff, 0x00, 0x3f, 0x61, 0x10, 0x09, 0x08
+        0x00, 0x01, TEST_MODEL_BYTE, 0x93, 0x00, 0xc9, TEST_PHASES, TEST_PUMPS, TEST_VOLTS >> 8, //20261124-8 change
+        TEST_VOLTS & 0xff, 0x00, 0x1f, 0x61, 0x10, 0x09, 0x08
     };
 
     send_request(info_request, sizeof(info_request));
@@ -1865,7 +1811,7 @@ static void check_final_vectors(void) //20261116-12 add
 
     if (TEST_PUMPS == 2 && TEST_PHASES == 1) {
         check_vector("0143BF0603010001004984",
-                     "0143BF0603810001100002A39300C9010200DC003F611009080EB3", 27); //20261124-5 change 修订与能力变更后的完整设备信息。
+                     "0143BF0603810001100001A39300C9010200DC001F61100908CC75", 27); //20261124-8 change 保留普通控制能力的完整设备信息。
     }
     check_vector("0143BF06030200020203015774", "0143BF0603820002060003010000646BA2", 17);
     check_vector("0143BF0603100003030303843AC0", "0143BF060390000304000303849E64", 15);
@@ -2078,11 +2024,11 @@ static void check_sensor_switch_hysteresis(void) //20261116-14 add
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-static void collect_fault(u8 *frame) //20261124-4 add
+static void collect_fault(u8 *frame) //20261124-8 change
 {
     u8 i;
 
-    for (i = 0; i < 24; i++) {
+    for (i = 0; i < BF4G_FAULT_FRAME_LENGTH; i++) {
         CHECK(uart4_sending());
         frame[i] = S4BUF;
         S4CON |= 2;
@@ -2096,236 +2042,6 @@ static void collect_fault(u8 *frame) //20261124-4 add
     for (i = 0; i < 11; i++) {
         uart4_fault_tick();
     }
-}
-
-/******************************************************************************
- * 函数名称       : check_fault_baseline
- * 功能描述       : 模拟两组保护检查后捕获完整的健康首帧。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void check_fault_baseline(void) //20261124-0 add
-{
-    static const u8 expected[] = {
-        0x01, 0x43, 0xbf, 0x06, 0x03, 0x20, 0x00, 0x01, 0x0d,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x04, 0x3b
-    };
-    u8 frame[sizeof(expected)];
-
-    uart_init();
-    config.Dev_Address = 1;
-    config_loaded = 1;
-    sys.Fault_Error = 0;
-    Boot_Flag = 0;
-    uart4_fault_start(1);
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(!uart4_sending());
-
-    Boot_Flag = 1;
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(!uart4_sending());
-    uart4_fault_scanned(0);
-    uart4_service();
-    collect_fault(frame);
-    CHECK(memcmp(frame, expected, sizeof(frame)) == 0);
-
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(!uart4_sending());
-}
-
-/******************************************************************************
- * 函数名称       : check_fault_ack
- * 功能描述       : 验证只有匹配的串口确认能释放已发送的首帧。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void check_fault_ack(void) //20261124-0 add
-{
-    static const u8 wrong_offsets[] = {0, 1, 4, 5, 7, 8, 9, 13, 17};
-    u8 ack[20] = {
-        1, 0x43, 0xbf, 0x06, 3, 0xa0, 0, 1, 9, 0, 0, 0, 0, 1, 0, 0, 0, 1
-    };
-    u8 bad[sizeof(ack)];
-    u8 i;
-
-    CHECK(uart4_fault_awaiting_ack());
-    fill_crc(ack, sizeof(ack));
-    for (i = 0; i < sizeof(wrong_offsets); i++) {
-        memcpy(bad, ack, sizeof(bad));
-        bad[wrong_offsets[i]] ^= 2;
-        fill_crc(bad, sizeof(bad));
-        send_request(bad, sizeof(bad));
-        CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
-    }
-
-    memcpy(bad, ack, sizeof(bad));
-    bad[19] ^= 1;
-    send_request(bad, sizeof(bad));
-    CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
-
-    memcpy(bad, ack, sizeof(bad));
-    fill_crc(bad, sizeof(bad) - 1);
-    send_request(bad, sizeof(bad) - 1);
-    CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
-
-    memcpy(bad, ack, sizeof(bad));
-    bad[5] = 0x20;                        // 用控制器发出的命令方向尝试确认。
-    check_error(bad, sizeof(bad), 1, 0xff);
-    CHECK(uart4_fault_awaiting_ack());
-
-    send_request(ack, sizeof(ack));
-    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
-    send_request(ack, sizeof(ack));
-    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
-    check_info(0);
-}
-
-/******************************************************************************
- * 函数名称       : check_fault_baseline_with_faults
- * 功能描述       : 启动编号不可用或位图不合法时等待，首次有效时携带实际故障。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void check_fault_baseline_with_faults(void) //20261124-0 add
-{
-    u8 frame[24];
-
-    uart_init();
-    Boot_Flag = 1;
-    sys.Fault_Error = 5;
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(!uart4_sending());
-
-    uart4_fault_start(0x12345678UL);
-    sys.Fault_Error = 0x80000000UL;       // 保留位无效，不能用零位图替代。
-    uart4_fault_scanned(0);
-    uart4_service();
-    CHECK(!uart4_sending());
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(!uart4_sending());
-
-    sys.Fault_Error = 5;
-    uart4_fault_scanned(1);
-    uart4_service();
-    collect_fault(frame);
-    CHECK(frame[5] == 0x20 && frame[7] == 1 && frame[8] == 13);
-    CHECK(frame[9] == 0x12 && frame[10] == 0x34 && frame[11] == 0x56 && frame[12] == 0x78);
-    CHECK(frame[16] == 1 && frame[17] == 0);
-    CHECK(frame[18] == 0 && frame[19] == 0 && frame[20] == 0 && frame[21] == 5);
-    CHECK(crc(frame, sizeof(frame)) == 0);
-}
-
-#if BF4G_BENCH_BOOT_INIT
-/******************************************************************************
- * 函数名称       : check_bench_boot_init
- * 功能描述       : 从擦空的独立板启动，并验证首次上报前的存储判断。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void check_bench_boot_init(void) //20261124-6 add
-{
-    u8 frame[24];
-    u8 parameters[sizeof(flash)];
-    u32 boot;
-
-    memcpy(parameters, flash, sizeof(flash));
-    boot_writes = 0;
-    memset(boot_flash, 0xff, sizeof(boot_flash));
-    boot_probe_available = 0;
-    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 0);
-    boot_probe_available = 1;
-
-    boot_flash[1][511] = 0;
-    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 0);
-    boot_flash[1][511] = 0xff;
-
-    boot_write_limit = 3;
-    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 1);
-    boot_write_limit = 12;
-    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 1);
-
-    memset(boot_flash, 0xff, sizeof(boot_flash));
-    boot_writes = 0;
-    boot = Par_AdvanceFaultBoot();
-    CHECK(boot == 1 && boot_writes == 2);
-    uart_init();
-    uart4_fault_cold_start();
-    uart4_fault_start(boot);
-    Boot_Flag = 1;
-    config.Dev_Address = 1;
-    sys.Fault_Error = 0;
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
-    collect_fault(frame);
-    CHECK(frame[5] == 0x20 && frame[12] == 1 && frame[16] == 1 && frame[17] == 0);
-    CHECK(crc(frame, sizeof(frame)) == 0);
-    CHECK(Par_AdvanceFaultBoot() == 2 && boot_writes == 3);
-    CHECK(memcmp(parameters, flash, sizeof(flash)) == 0);
-}
-#endif
-
-/******************************************************************************
- * 函数名称       : check_fault_boot_store
- * 功能描述       : 核对两份首次初始化数据的续号和独立擦写。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void check_fault_boot_store(void) //20261124-1 add
-{
-    static const u8 seed[12] = {0x42, 0x46, 0x30, 0x36, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff};
-    u8 current[sizeof(flash)];
-
-    memcpy(current, flash, sizeof(flash));
-    boot_writes = 0;
-    memset(boot_flash, 0xff, sizeof(boot_flash));
-#if !BF4G_BENCH_BOOT_INIT
-    CHECK(Par_AdvanceFaultBoot() == 0);
-    CHECK(boot_writes == 0);
-#endif
-
-    memcpy(boot_flash[0], seed, sizeof(seed));
-    memcpy(boot_flash[1], seed, sizeof(seed));
-    CHECK(Par_AdvanceFaultBoot() == 1);
-    CHECK(Par_AdvanceFaultBoot() == 2);
-    CHECK(boot_writes == 2);
-    uart_init();
-    uart4_fault_start(2);
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(boot_writes == 2);
-
-    boot_write_limit = 8;
-    CHECK(Par_AdvanceFaultBoot() == 0);
-    CHECK(boot_writes == 3);
-    boot_write_limit = 12;
-    uart_init();
-    uart4_fault_start(Par_AdvanceFaultBoot());
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(!uart4_sending() && boot_writes == 3);
-    check_info(0);
-
-#if !BF4G_BENCH_BOOT_INIT
-    memset(boot_flash, 0xff, sizeof(boot_flash));
-    CHECK(Par_AdvanceFaultBoot() == 0 && boot_writes == 3);
-#endif
-    CHECK(memcmp(current, flash, sizeof(flash)) == 0);
 }
 
 /******************************************************************************
@@ -2345,171 +2061,115 @@ static void fault_ticks(u16 count) //20261124-2 add
 }
 
 /******************************************************************************
- * 函数名称       : check_fault_retries
- * 功能描述       : 验证重发原帧、最后确认窗口及重新上电。
- * 输入参数       : ack_on_last，是否在最后窗口提供确认。
+ * 函数名称       : expect_fault
+ * 功能描述       : 从发送中断取完整状态帧，逐字节检查机号、四字节位图和校验。
+ * 输入参数       : address，预期设备地址；mask，预期故障位图。
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-static void check_fault_retries(bit ack_on_last) //20261124-2 add
+static void expect_fault(u8 address, u32 mask) //20261124-8 add
 {
-    u8 original[24];
-    u8 frame[24];
-    u8 ordinary[27];
-    u8 ack[20] = {1, 0x43, 0xbf, 6, 3, 0xa0, 0, 1, 9, 0, 0, 0, 0, 1, 0, 0, 0, 1};
-    u8 retry;
+    u8 expected[15] = {1, 0x43, 0xbf, 6, 3, 0x21, 0, 1, 4};
+    u8 frame[BF4G_FAULT_FRAME_LENGTH];
 
-    uart_init();
-    uart4_fault_cold_start();
-    uart4_fault_start(1);
-    config.Dev_Address = 1;
-    Boot_Flag = 1;
-    sys.Fault_Error = 0;
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(uart4_sending());
-    fault_ticks(6000);                   // 发送还未结束，确认窗口不能提前开始。
-    collect_fault(original);
-    for (retry = 0; retry < 10; retry++) {
-        fault_ticks(4989);
-        CHECK(!uart4_sending());
-        if (retry == 0) {
-            send_request(info_request, sizeof(info_request));
-            fault_ticks(1);
-            collect_reply(ordinary, sizeof(ordinary), 0);
-            fault_ticks(11);
-        } else {
-            fault_ticks(1);
-        }
-        collect_fault(frame);
-        CHECK(memcmp(frame, original, sizeof(frame)) == 0);
-    }
-
-    fault_ticks(4989);
-    CHECK(!uart4_sending() && uart4_fault_awaiting_ack());
-    fill_crc(ack, sizeof(ack));
-    if (ack_on_last) {
-        send_request(ack, sizeof(ack));
-        CHECK(!uart4_fault_awaiting_ack());
-        return;
-    }
-
-    fault_ticks(1);
-    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
-    send_request(ack, sizeof(ack));      // 停发后迟到确认不能恢复。
-    sys.Fault_Error = 4;
-    uart4_fault_scanned(1);
-    fault_ticks(6000);
-    CHECK(!uart4_sending());
-    check_info(0);
-
-    uart_init();                        // 软件复位仍属于本次通电。
-    uart4_fault_start(2);
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
-    CHECK(!uart4_sending());
-
-    uart4_fault_cold_start();            // 模拟控制器失电后重新上电。
-    uart4_fault_start(3);
-    uart4_fault_scanned(0);
-    uart4_fault_scanned(1);
-    uart4_service();
+    expected[0] = address;
+    expected[9] = (u8)(mask >> 24);
+    expected[10] = (u8)(mask >> 16);
+    expected[11] = (u8)(mask >> 8);
+    expected[12] = (u8)mask;
+    fill_crc(expected, sizeof(expected));
+    CHECK(sizeof(frame) == sizeof(expected));
     collect_fault(frame);
-    CHECK(frame[12] == 3 && frame[21] == 4);
+    CHECK(memcmp(frame, expected, sizeof(expected)) == 0);
 }
 
 /******************************************************************************
- * 函数名称       : ack_fault_frame
- * 功能描述       : 按收到的事件身份发送匹配确认。
- * 输入参数       : frame，收到的主动事件。
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void ack_fault_frame(const u8 *frame) //20261124-3 add
-{
-    u8 ack[20];
-
-    memcpy(ack, frame, 8);
-    ack[5] = 0xa0;
-    ack[8] = 9;
-    ack[9] = 0;
-    memcpy(ack + 10, frame + 9, 8);
-    fill_crc(ack, sizeof(ack));
-    send_request(ack, sizeof(ack));
-}
-
-/******************************************************************************
- * 函数名称       : check_fault_changes
- * 功能描述       : 验证普通变化、合并回到原值和无效后同值恢复。
+ * 函数名称       : check_fault_without_storage
+ * 功能描述       : 检查两组扫描后的首报、全位图变化、恢复和无回包时的持续上报。
  * 输入参数       : None
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-static void check_fault_changes(void) //20261124-3 add
+static void check_fault_without_storage(void) //20261124-8 add
 {
-    u8 frame[24];
+    u8 writes = flash_writes;
+    u8 ack[] = {1, 0x43, 0xbf, 6, 3, 0xa0, 0, 1, 9, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0};
 
     uart_init();
-    uart4_fault_cold_start();
-    uart4_fault_start(7);
     config.Dev_Address = 1;
-    Boot_Flag = 1;
+    Boot_Flag = 0;
     sys.Fault_Error = 0;
     uart4_fault_scanned(0);
     uart4_fault_scanned(1);
     uart4_service();
-    collect_fault(frame);
+    CHECK(!uart4_sending());
+    Boot_Flag = 1;
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+    uart4_fault_scanned(0);
+    uart4_service();
+    expect_fault(1, 0);
 
+    fault_ticks(60000);                 // 全程无确认，经过原来的重试和停报时间。
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+    sys.Fault_Error = 2;
+    uart4_fault_scanned(1);
+    uart4_service();
+    expect_fault(1, 2);
+    config_loaded = water_status_ready = 1;
+    sensor_pending_tanks = 0;
+    sys.shang_shuiwei = sys.xia_shuiwei = 0;
+    // 回放实板过压时的查询，逐字节核对同一状态下普通应答与主动上报。
+    check_vector("0143BF0603030029020903D820",
+                 "0143BF060383002912000903000000000200000000020000000102092F", 29);
+    fault_ticks(11);
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+
+    sys.Fault_Error = 0x80000000UL;
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());
+    sys.Fault_Error = 2;
+    uart4_fault_scanned(1);
+    uart4_service();
+    CHECK(!uart4_sending());           // 无效样本不产生恢复或相同状态的重复帧。
+    fill_crc(ack, sizeof(ack));
+    send_request(ack, sizeof(ack));
+    CHECK(!uart4_sending());
+    sys.Fault_Error = 6;
+    uart4_fault_scanned(1);
+    uart4_service();
+    expect_fault(1, 6);
     sys.Fault_Error = 4;
     uart4_fault_scanned(1);
+    uart4_service();
+    expect_fault(1, 4);
     sys.Fault_Error = 0;
     uart4_fault_scanned(1);
     uart4_service();
-    CHECK(!uart4_sending());
-    ack_fault_frame(frame);
-    uart4_service();
-    collect_fault(frame);
-    CHECK(frame[7] == 3 && frame[16] == 3 && frame[17] == 2 && frame[21] == 0);
-    ack_fault_frame(frame);
+    expect_fault(1, 0);
 
-    sys.Fault_Error = 5;
-    uart4_fault_scanned(1);
-    uart4_service();
-    collect_fault(frame);
-    CHECK(frame[16] == 4 && frame[17] == 1 && frame[21] == 5);
-    sys.Fault_Error = 4;
-    uart4_fault_scanned(1);
-    ack_fault_frame(frame);
-    uart4_service();
-    collect_fault(frame);
-    CHECK(frame[16] == 5 && frame[17] == 1 && frame[21] == 4);
-    ack_fault_frame(frame);
-
-    sys.Fault_Error = 0x80010000UL;
+    uart_init();
+    sys.Fault_Error = 0x80000000UL;
+    uart4_fault_scanned(0);
     uart4_fault_scanned(1);
     uart4_service();
     CHECK(!uart4_sending());
-    sys.Fault_Error = 4;
+    sys.Fault_Error = 2;
     uart4_fault_scanned(1);
     uart4_service();
-    collect_fault(frame);
-    CHECK(frame[16] == 6 && frame[17] == 2 && frame[21] == 4);
-    ack_fault_frame(frame);
-
+    expect_fault(1, 2);                 // 上电后第一份有效样本已经过压。
+    uart_init();
+    uart4_fault_scanned(0);
     uart4_fault_scanned(1);
     uart4_service();
-    CHECK(!uart4_sending());
-    sys.Fault_Error = 0x00010000UL;
-    uart4_fault_scanned(1);
-    uart4_service();
-    if (TEST_PUMPS == 2) {
-        collect_fault(frame);
-        CHECK(frame[16] == 7 && frame[17] == 1 && frame[19] == 1 && frame[21] == 0);
-    } else {
-        CHECK(!uart4_sending());
-    }
+    expect_fault(1, 2);                 // 重新启动，即使故障未变仍要首报。
+    CHECK(flash_writes == writes);
 }
 
 /******************************************************************************
@@ -2519,16 +2179,14 @@ static void check_fault_changes(void) //20261124-3 add
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-static void check_fault_stop_overlap(void) //20261124-4 add
+static void check_fault_stop_overlap(void) //20261124-8 change
 {
     u8 stop[] = {1, 0x43, 0xbf, 6, 3, 0x11, 0, 1, 2, 2, 1, 0, 0};
-    u8 event[24];
+    u8 event[BF4G_FAULT_FRAME_LENGTH];
     u8 reply[20];
     u8 i;
 
     uart_init();
-    uart4_fault_cold_start();
-    uart4_fault_start(7);
     config.Dev_Address = 1;
     config.Hand_Auto_timer_Flag = RUNMODE_MANUAL;
     Boot_Flag = 1;
@@ -2546,9 +2204,6 @@ static void check_fault_stop_overlap(void) //20261124-4 add
         if (i < sizeof(stop)) {
             receive_byte(stop[i]);      // 第一字节分别从两个方向同时开始传输。
         }
-        if (i == sizeof(stop) + 9) {
-            timer_expire();              // 停泵请求在故障帧结束前收全。
-        }
         S4CON |= 2;
         UART4_int();
     }
@@ -2558,90 +2213,62 @@ static void check_fault_stop_overlap(void) //20261124-4 add
     CHECK(uart4_sending());
     fault_ticks(1);
     CHECK(!uart4_sending());
-    fault_ticks(10);
+    fault_ticks(7);
+    timer_expire();                     // 停泵请求已收全，并经过收帧静默。
+    fault_ticks(3);
     scan_control();
     CHECK(!uart4_sending());           // 未达到主动帧后的完整静默。
     fault_ticks(1);
     CHECK(uart4_blocks_save() && !uart4_sending());
-    ack_fault_frame(event);
-    CHECK(uart4_fault_awaiting_ack());
     scan_control();
     collect_reply(reply, sizeof(reply), 0);
     CHECK(reply[5] == 0x91 && reply[7] == 1 && reply[9] == 0);
     CHECK(reply[10] == 2 && (reply[13] & 0x10) == 0 && crc(reply, sizeof(reply)) == 0);
     CHECK(!sys.Pump_A_ON);
-    timer_expire();                     // 等待期间额外数据丢弃后重新同步。
-    ack_fault_frame(event);
     fault_ticks(20);
-    CHECK(!uart4_sending() && !uart4_fault_awaiting_ack());
+    CHECK(!uart4_sending());
 }
 
 /******************************************************************************
- * 函数名称       : check_fault_address_change
- * 功能描述       : 验证改址后仍保留旧址原帧，普通请求和后续帧使用新址。
+ * 函数名称       : check_fault_pending_address
+ * 功能描述       : 普通请求占用串口时只保留最新有效位图，空闲后使用当前地址。
  * 输入参数       : None
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-static void check_fault_address_change(void) //20261124-4 add
+static void check_fault_pending_address(void) //20261124-8 add
 {
     u8 write[] = {1, 0x43, 0xbf, 6, 3, 0x10, 0, 1, 3, 11, 0, 2, 0, 0};
     u8 reply[15];
-    u8 original[24];
-    u8 event[24];
 
     uart_init();
-    uart4_fault_cold_start();
-    uart4_fault_start(7);
-    config.Dev_Address = 1;
     Boot_Flag = 1;
-    sys.Fault_Error = 4;
+    config.Dev_Address = 1;
+    sys.Fault_Error = 0;
     uart4_fault_scanned(0);
     uart4_fault_scanned(1);
     uart4_service();
-    collect_fault(original);
-
+    expect_fault(1, 0);
     fill_crc(write, sizeof(write));
     send_request(write, sizeof(write));
-    collect_reply(reply, sizeof(reply), 0);
-    CHECK(config.Dev_Address == 2 && reply[0] == 1 && reply[5] == 0x90);
+    sys.Fault_Error = 4;
+    uart4_fault_scanned(1);
     sys.Fault_Error = 0;
     uart4_fault_scanned(1);
-    fault_ticks(4990);
-    collect_fault(event);
-    CHECK(memcmp(event, original, sizeof(event)) == 0);
-
-    event[0] = 2;
-    ack_fault_frame(event);
-    CHECK(uart4_fault_awaiting_ack());
+    collect_reply(reply, sizeof(reply), 0);
+    CHECK(config.Dev_Address == 2 && reply[0] == 1 && reply[5] == 0x90);
+    fault_ticks(11);
+    CHECK(!uart4_sending());            // 忙时变动又恢复到上次发送值，无需重复发零。
+    sys.Fault_Error = 2;
+    uart4_fault_scanned(1);
+    uart4_service();
+    sys.Fault_Error = 0;
+    uart4_fault_scanned(1);             // 发送中采到恢复，不能覆盖当前故障帧。
+    expect_fault(2, 2);
+    uart4_service();
+    expect_fault(2, 0);
     query_address(1, 0);
     query_address(2, 1);
-    ack_fault_frame(original);
-    CHECK(!uart4_fault_awaiting_ack());
-    fault_ticks(11);
-    collect_fault(event);
-    CHECK(event[0] == 2 && event[16] == 2 && event[17] == 1 && event[21] == 0);
-    CHECK(crc(event, sizeof(event)) == 0);
-}
-
-/******************************************************************************
- * 函数名称       : check_fault_rid_wrap
- * 功能描述       : 核对关联号回卷和三十二位序号的大端编码。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void check_fault_rid_wrap(void) //20261124-5 add
-{
-    u8 frame[24];
-
-    bf4g_fault_encode(frame, 1, 65535UL, 1, 0);
-    CHECK(frame[6] == 0xff && frame[7] == 0xff && crc(frame, sizeof(frame)) == 0);
-    bf4g_fault_encode(frame, 1, 65536UL, 1, 0);
-    CHECK(frame[6] == 0 && frame[7] == 1 && frame[14] == 1 && frame[16] == 0);
-    bf4g_fault_encode(frame, 1, 0xffffffffUL, 2, 0);
-    CHECK(frame[6] == 0xff && frame[7] == 0xff && frame[13] == 0xff && frame[16] == 0xff);
-    CHECK(crc(frame, sizeof(frame)) == 0);
 }
 
 /******************************************************************************
@@ -2683,7 +2310,6 @@ int main(void) //20261116-0 add
 {
     u8 bad[98];
     u8 i;
-    u8 boot_writes_before_reporting; //20261124-5 add 常规上报全流程的编号写入基线。
 
     config.Dev_Address = 1;
     config_loaded = 1;
@@ -2769,22 +2395,10 @@ int main(void) //20261116-0 add
     check_rf_during_summary();
     check_sensor_switch_hysteresis();
     check_sensor_startup();
-    check_fault_baseline(); //20261124-0 add 核对启动基线的串口报文。
-    check_fault_ack(); //20261124-0 add 校验主动报文确认边界。
-    check_fault_baseline_with_faults(); //20261124-0 add 核对带故障启机和无效位图。
-#if BF4G_BENCH_BOOT_INIT
-    check_bench_boot_init(); //20261124-6 add 先验证只烧程序的清空板。
-#endif
-    check_fault_boot_store(); //20261124-1 add 检查首次初始化和安全续号。
-    boot_writes_before_reporting = boot_writes;
-    check_fault_retries(0); //20261124-2 add 核对重发、停报和再次上电。
-    check_fault_retries(1);
-    check_fault_changes(); //20261124-3 add 核对完整活动位图及等待期间的合并。
-    check_fault_stop_overlap(); //20261124-4 add 验证主动发送和首次停泵重叠。
-    check_fault_address_change(); //20261124-4 add 验证改址后原事件的确认范围。
-    check_fault_rid_wrap(); //20261124-5 add 确认关联号独立于完整报文序号。
+    check_fault_without_storage();
+    check_fault_stop_overlap();
+    check_fault_pending_address();
     check_fault_mask_matrix();
-    CHECK(boot_writes == boot_writes_before_reporting);
     puts("BF4G_UART_TEST=PASS");
     return 0;
 }

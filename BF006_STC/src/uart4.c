@@ -9,11 +9,8 @@
 #define S4_TAIL_RELOAD   (65536UL - MAIN_Fosc / 12 / BaudRate4 * 2)
 
 #define S4_CONTROL_TICKS 30 //20261117-7 add 每次十毫秒，最多等待三百毫秒。
-#define S4_FAULT_WAIT_TICKS 5001 //20261124-2 add 避免首个节拍的相位使五秒窗口提前结束。
-#define S4_FAULT_ATTEMPTS 11 //20261124-2 add 一次首发加十次重发。
 #define S4_FAULT_STOP_TICKS 2 //20261124-4 add 至少经过一毫秒，确保故障帧最后一个停止位已完成。
 #define S4_OUTPUT_GAP_TICKS 11 //20261124-4 add 任意节拍相位均保留至少十毫秒的发送静默。
-#define S4_FAULT_STOP_MARK 0xa5 //20261124-2 add 在保留的运行内存中标记本次通电已停报。
 
 // 定时器三用于帧间静默、控制等待和发送尾部计时。
 #define S4_TIMER_ARM(reload) do { \
@@ -40,36 +37,18 @@ static volatile u8 s4_next;
 static volatile u8 s4_control_ticks; //20261117-7 add 控制等待的剩余时段数。
 static volatile bit s4_disturbed;
 
-enum { //20261124-0 add 启动基线在采样、待发和等待确认之间移交。
-    S4_FAULT_DISABLED,
-    S4_FAULT_BASELINE,
-    S4_FAULT_READY,
-    S4_FAULT_IDLE, //20261124-3 add 已有基线，等待新的有效状态。
-    S4_FAULT_WAIT
-};
-
-static u8 xdata s4_fault_frame[BF4G_FAULT_FRAME_LENGTH];
-static u32 xdata s4_fault_boot;
-#define S4_FAULT_CHANGED 1 //20261124-3 add 在途期间记录最新状态和合并情况。
-#define S4_FAULT_RESYNC  2
-#define S4_FAULT_INVALID 4
-#define S4_FAULT_REBASE  8 //20261124-5 add 启动内序号耗尽时改用新编号建立基线。
+static u8 xdata s4_fault_frame[BF4G_FAULT_FRAME_LENGTH]; //20261124-8 change 与普通请求分开，发送中仍可接收停泵指令。
 static u32 xdata s4_fault_latest;
-static u32 xdata s4_fault_seq;
-static u8 s4_fault_flags;
-static volatile u8 s4_fault_state; //20261124-4 change 接收中断检查是否接受在途帧的原地址。
+static u32 xdata s4_fault_last_sent;
+static bit s4_fault_has_sent;
+static bit s4_fault_pending;
 static u8 s4_fault_scans;
-static u8 s4_fault_sent; //20261124-2 add 只累计已经开始发送的次数。
-static volatile u16 s4_fault_timeout;
 static volatile bit s4_fault_tx;
 static volatile u8 s4_fault_next; //20261124-4 add 故障发送不占用普通接收缓冲。
 static volatile u8 s4_fault_tail;
 static volatile u8 s4_tx_gap;
 static volatile bit s4_hold_reply;
-static volatile bit s4_ack_only;
-static volatile bit s4_ack_on_time;
-static volatile bit s4_fault_due;
-static u8 xdata s4_fault_stop_mark; // 启动汇编保留扩展运行内存，真实上电时显式清除。
+
 #if 0 //20261113-0 del 释放旧串口的收发缓冲区、指针及接收超时状态。
 #define	TimeOutSet4		5
 
@@ -85,7 +64,7 @@ u8 	xdata RX4_Buffer[COM_RX4_Lenth];	//接收缓冲
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-void uart_init(void) //20261116-0 change
+void uart_init(void) //20261124-8 change
 {
     S4CON = 0;                   // 八位数据、无校验、一位停止位。
     Timer3_Stop();
@@ -95,15 +74,13 @@ void uart_init(void) //20261116-0 change
     Timer3_InterruptEnable();
     s4_state = S4_IDLE;
     s4_disturbed = 0;
-    s4_fault_state = S4_FAULT_DISABLED; //20261124-0 add 可信编号就绪之前保持上报停用。
-    s4_fault_timeout = 0; //20261124-2 add 每次串口初始化均清除在途计时状态。
+    s4_fault_scans = 0;              //20261124-8 change 每次开机等待两组保护扫描，首个有效状态必发。
+    s4_fault_has_sent = 0;
+    s4_fault_pending = 0;
     s4_fault_tx = 0;
-    s4_fault_due = 0;
     s4_fault_tail = 0; //20261124-4 add 初始化独立发送尾部和回复避让标志。
     s4_tx_gap = 0;
     s4_hold_reply = 0;
-    s4_ack_only = 0;
-    s4_ack_on_time = 0;
     S4_USE_P52P53();
     S4_BRT_UseTimer4();
     Timer4_Stop();
@@ -185,25 +162,13 @@ void UART4_RX_CNT(void)
 #endif
 
 /******************************************************************************
- * 函数名称       : uart4_fault_cold_start
- * 功能描述       : 软件启动时仅在确认是新通电周期后解除停发。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-void uart4_fault_cold_start(void) //20261124-2 add
-{
-    s4_fault_stop_mark = 0;
-}
-
-/******************************************************************************
  * 函数名称       : uart4_fault_tick
- * 功能描述       : 以定时器零的毫秒节拍更新主动帧确认窗口。
+ * 功能描述       : 以定时器零的毫秒节拍保证发送尾部和帧间静默。
  * 输入参数       : None
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-void uart4_fault_tick(void) //20261124-4 change
+void uart4_fault_tick(void) //20261124-8 change
 {
     if (s4_tx_gap != 0) {
         s4_tx_gap--;
@@ -212,103 +177,35 @@ void uart4_fault_tick(void) //20261124-4 change
         s4_fault_tx = 0;
         s4_hold_reply = 1;
         s4_tx_gap = S4_OUTPUT_GAP_TICKS; // 先保证发出的两帧之间有完整静默。
-        s4_fault_timeout = S4_FAULT_WAIT_TICKS;
-    } else if (s4_fault_timeout != 0 && --s4_fault_timeout == 0) {
-        s4_fault_due = 1;
     }
-}
-
-/******************************************************************************
- * 函数名称       : uart4_fault_start
- * 功能描述       : 在取得可信启动编号后开启首帧采样。
- * 输入参数       : boot，已经可靠保存的启动编号，零表示保持停用。
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-void uart4_fault_start(u32 boot) //20261124-2 change
-{
-    s4_fault_boot = boot;
-    s4_fault_scans = 0;
-    s4_fault_flags = 0; //20261124-3 add 每次可信启动独立建立状态。
-    s4_fault_sent = 0;
-    if (boot != 0 && s4_fault_stop_mark != S4_FAULT_STOP_MARK) {
-        s4_fault_state = S4_FAULT_BASELINE;
-    }
-}
-
-/******************************************************************************
- * 函数名称       : uart4_queue_fault
- * 功能描述       : 冻结最新有效状态并开始该事件自己的发送计数。
- * 输入参数       : kind，主动事件类别。
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void uart4_queue_fault(u8 kind) //20261124-3 add
-{
-    bf4g_fault_encode(s4_fault_frame, s4_fault_boot, s4_fault_seq, kind, s4_fault_latest);
-    s4_fault_flags = 0;                 // 后续采样只能更新下一条事件的状态。
-    s4_fault_sent = 0;
-    s4_fault_state = S4_FAULT_READY;
 }
 
 /******************************************************************************
  * 函数名称       : uart4_fault_scanned
- * 功能描述       : 在保护扫描后更新最新有效位图和已观察变化的序号。
+ * 功能描述       : 首次等两组保护扫描就绪，之后每秒比较最新有效位图与上次发送值。
  * 输入参数       : one_second，一表示一秒组，零表示百毫秒组。
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-void uart4_fault_scanned(bit one_second) //20261124-5 change
+void uart4_fault_scanned(bit one_second) //20261124-8 change
 {
     u32 faults;
 
-    if (s4_fault_state == S4_FAULT_DISABLED || !Boot_Flag) {
+    if (!Boot_Flag) {
         return;
     }
     if (one_second) {
         s4_fault_scans |= 2;
     } else {
         if (s4_fault_scans & 1) {
-            return;                    // 两组都运行后只在一秒组结束时采样。
+            return;
         }
         s4_fault_scans |= 1;
     }
-    if (s4_fault_scans != 3) {
-        return;
-    }
-    if (!bf4g_fault_sample(&faults)) {
-        s4_fault_flags |= S4_FAULT_INVALID;
-        return;
-    }
-    if (s4_fault_state == S4_FAULT_BASELINE) {
+    if (s4_fault_scans == 3 && bf4g_fault_sample(&faults)) {
         s4_fault_latest = faults;
-        s4_fault_seq = 1;
-        uart4_queue_fault(0);
-    } else if (faults != s4_fault_latest || (s4_fault_flags & S4_FAULT_INVALID)) {
-        if (s4_fault_flags & (S4_FAULT_CHANGED | S4_FAULT_INVALID)) {
-            s4_fault_flags |= S4_FAULT_RESYNC; // 已有变化被合并，或样本恢复有效。
-        }
-        s4_fault_flags &= ~S4_FAULT_INVALID;
-        s4_fault_flags |= S4_FAULT_CHANGED;
-        s4_fault_latest = faults;
-        if (s4_fault_seq == 0xffffffffUL) { //20261124-5 add 换新编号前保留在途原帧。
-            s4_fault_flags |= S4_FAULT_REBASE;
-        } else {
-            s4_fault_seq++;             // 已知中间变化占用序号，合并后保留缺口。
-        }
+        s4_fault_pending = !s4_fault_has_sent || faults != s4_fault_last_sent;
     }
-}
-
-/******************************************************************************
- * 函数名称       : uart4_fault_awaiting_ack
- * 功能描述       : 判断当前是否仍保留已发的主动帧等待确认。
- * 输入参数       : None
- * 返回值         : 等待确认时为一。
- * 日期            : 2026.11.24
- ******************************************************************************/
-bit uart4_fault_awaiting_ack(void) //20261124-0 add
-{
-    return s4_fault_state == S4_FAULT_WAIT;
 }
 
 /******************************************************************************
@@ -318,7 +215,7 @@ bit uart4_fault_awaiting_ack(void) //20261124-0 add
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-void UART4_int(void) interrupt UART4_VECTOR //20261124-4 change
+void UART4_int(void) interrupt UART4_VECTOR //20261124-8 change
 {
     u8 value;
 
@@ -329,7 +226,6 @@ void UART4_int(void) interrupt UART4_VECTOR //20261124-4 change
             s4_state = S4_IDLE;          // 新字节已在完整静默之后到达。
         }
         if ((AUXINTIF & T3IF) && s4_state == S4_RECEIVE) {
-            s4_ack_on_time = !s4_fault_due;
             s4_state = S4_READY;         // 保住已完整的上一帧，当前字节不能排队。
         }
         if (s4_state == S4_READY || s4_state == S4_PROCESS ||
@@ -338,10 +234,7 @@ void UART4_int(void) interrupt UART4_VECTOR //20261124-4 change
         } else {
             if (s4_state == S4_IDLE) {
                 s4_count = 0;
-                // 只有等待原帧确认时，才暂收用于核对的旧址报文。
-                s4_ack_only = value != config.Dev_Address;
-                if (value == 0 || value == 0xff ||
-                    (s4_ack_only && (s4_fault_state != S4_FAULT_WAIT || value != s4_fault_frame[0]))) {
+                if (value == 0 || value == 0xff || value != config.Dev_Address) { //20261124-8 change 只接收本机地址的请求。
                     s4_state = S4_DISCARD;
                 } else {
                     s4_state = S4_RECEIVE;
@@ -385,7 +278,7 @@ void UART4_int(void) interrupt UART4_VECTOR //20261124-4 change
  * 返回值         : None
  * 日期            : 2026.11.16
  ******************************************************************************/
-void UART4_Timer3_int(void) interrupt TIMER3_VECTOR //20261124-4 change
+void UART4_Timer3_int(void) interrupt TIMER3_VECTOR //20261124-8 change
 {
     Timer3_Stop();
     AUXINTIF &= ~T3IF;
@@ -394,7 +287,6 @@ void UART4_Timer3_int(void) interrupt TIMER3_VECTOR //20261124-4 change
         s4_hold_reply = 0;
     }
     if (s4_state == S4_RECEIVE) {
-        s4_ack_on_time = !s4_fault_due;
         s4_state = S4_READY;
     } else if (s4_state == S4_PROCESS && s4_control_ticks != 0) { //20261117-7 add
         if (--s4_control_ticks != 0) {
@@ -441,47 +333,26 @@ static void uart4_finish(u8 length) //20261117-7 add
 
 /******************************************************************************
  * 函数名称       : uart4_send_fault
- * 功能描述       : 有完整首帧且没有普通请求占用串口时启动发送。
+ * 功能描述       : 封装最新状态，在串口空闲时发出首字节并记住本次位图。
  * 输入参数       : None
  * 返回值         : None
  * 日期            : 2026.11.24
  ******************************************************************************/
-static void uart4_send_fault(void) //20261124-4 change
+static void uart4_send_fault(void) //20261124-8 change
 {
     bit interrupts = EA;
 
+    bf4g_fault_encode(s4_fault_frame, s4_fault_latest);
     EA = 0;
     if (s4_state == S4_IDLE && !RI4 && s4_tx_gap == 0) {
-        s4_fault_due = 0;
-        s4_fault_tx = 1;
         s4_fault_next = 1;
-        s4_fault_sent++;
-        s4_fault_state = S4_FAULT_WAIT;
-        S4BUF = s4_fault_frame[0];       // 直接使用原帧发送，接收缓冲留给普通请求。
+        s4_fault_tx = 1;
+        S4BUF = s4_fault_frame[0];      // 首字节交给硬件后才记为已发送。
+        s4_fault_last_sent = s4_fault_latest;
+        s4_fault_has_sent = 1;
+        s4_fault_pending = 0;
     }
     EA = interrupts;
-}
-
-/******************************************************************************
- * 函数名称       : uart4_queue_pending_fault
- * 功能描述       : 在没有在途帧时冻结已观察到的最新有效状态。
- * 输入参数       : None
- * 返回值         : None
- * 日期            : 2026.11.24
- ******************************************************************************/
-static void uart4_queue_pending_fault(void) //20261124-5 add
-{
-    if (s4_fault_flags & S4_FAULT_REBASE) {
-        s4_fault_boot = Par_AdvanceFaultBoot();
-        if (s4_fault_boot == 0) {
-            s4_fault_state = S4_FAULT_DISABLED; // 不能可靠取得新编号时暂停主动报文。
-            return;
-        }
-        s4_fault_seq = 1;
-        uart4_queue_fault(0);           // 旧序号用尽后以新编号建立基线。
-    } else {
-        uart4_queue_fault((s4_fault_flags & S4_FAULT_RESYNC) != 0 ? 2 : 1);
-    }
 }
 
 /******************************************************************************
@@ -491,18 +362,12 @@ static void uart4_queue_pending_fault(void) //20261124-5 add
  * 返回值         : None
  * 日期            : 2026.11.17
  ******************************************************************************/
-void uart4_service(void) //20261124-5 change
+void uart4_service(void) //20261124-8 change
 {
     u8 length;
-    bit interrupts;
 
     if (s4_fault_tx || (s4_hold_reply && s4_tx_gap != 0)) {
         return;                         // 已收全的请求保留，等待当前故障帧及发送静默结束。
-    }
-    if (s4_fault_state == S4_FAULT_WAIT && s4_fault_due && s4_fault_sent == S4_FAULT_ATTEMPTS &&
-        !(s4_state == S4_READY && s4_ack_on_time && s4_count > 5 && s4_frame[5] == 0xa0)) {
-        s4_fault_state = S4_FAULT_DISABLED;
-        s4_fault_stop_mark = S4_FAULT_STOP_MARK; // 最后一轮超时后的回包不能恢复主动上报。
     }
     if (s4_state == S4_PROCESS) {
         if (s4_control_ticks == 0) {
@@ -511,35 +376,13 @@ void uart4_service(void) //20261124-5 change
         return;
     }
     if (s4_state != S4_READY) {
-        if (s4_state == S4_IDLE && !RI4 && s4_tx_gap == 0 && s4_fault_state == S4_FAULT_IDLE &&
-            (s4_fault_flags & (S4_FAULT_CHANGED | S4_FAULT_INVALID)) == S4_FAULT_CHANGED) {
-            uart4_queue_pending_fault();
-        }
-        if (s4_state == S4_IDLE &&
-            (s4_fault_state == S4_FAULT_READY || (s4_fault_state == S4_FAULT_WAIT && s4_fault_due))) {
+        if (s4_fault_pending && s4_state == S4_IDLE && !RI4 && s4_tx_gap == 0) {
             uart4_send_fault();
         }
         return;
     }
 
     s4_state = S4_PROCESS;             // 独占共享帧，等待期间不接收下一笔请求。
-    if (s4_count > 5 && s4_frame[5] == 0xa0) { //20261124-4 change 主动确认单独处理，始终静默。
-        if (uart4_fault_awaiting_ack() &&
-            bf4g_fault_ack_matches(s4_frame, s4_count, s4_fault_frame)) {
-            interrupts = EA;
-            EA = 0;
-            s4_fault_timeout = 0;
-            s4_fault_due = 0;
-            EA = interrupts;
-            s4_fault_state = S4_FAULT_IDLE; // 本帧已经确认，可以创建后续状态帧。
-        }
-        uart4_finish(0);
-        return;
-    }
-    if (s4_ack_only) {
-        uart4_finish(0);                // 旧地址上的普通请求不进入协议分发。
-        return;
-    }
     length = bf4g_reply(s4_frame, s4_count);
     if (length == BF4G_REPLY_PENDING) {
         s4_control_ticks = S4_CONTROL_TICKS;

@@ -15,13 +15,6 @@
 
 #include	"config.h"
 
-#ifndef BF4G_BENCH_BOOT_INIT //20261124-7 change 允许编译目标指定空白编号区初始化。
-#define BF4G_BENCH_BOOT_INIT 0
-#endif
-#if BF4G_BENCH_BOOT_INIT
-bit EEPROM_is_erased(u16 address, u16 length);
-#endif
-
 #define		STC8X1K08	8
 #define		STC8X1K16	16
 #define		STC8XxK32	32
