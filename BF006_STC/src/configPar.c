@@ -63,8 +63,8 @@ void Par_Init(void) //20260729-13 change
         config.Pump_AB_Mode = 0;
         config.Dev_Address = 1;
 
-        config.Sensor_Rang = 10;
-        config.Sensor_overFlow = 10;
+        config.Sensor_Rang = 50;      //20261125-0 change 参数十四的量程默认值为五点零，按十分位存储。
+        config.Sensor_overFlow = 50;  //20261125-0 change 参数二十的溢出报警默认值为五点零，按十分位存储。
         config.Sensor_STOP = 9;
         config.Sensor_ON1 = 5;
         config.Sensor_ON2 = 1;
